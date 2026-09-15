@@ -26,7 +26,18 @@ partial class MainForm
         tabs.Name = "MainTabs";
         tabs.Dock = DockStyle.Fill;
         tabs.Padding = new Point(20, 10);
-        foreach (var title in new[] { "상품", "주문기록", "사이트관리", "상품추가", "로그", "설정" })
+        tabs.DrawMode = TabDrawMode.OwnerDrawFixed;
+        tabs.DrawItem += (_, e) =>
+        {
+            bool selected = e.Index == tabs.SelectedIndex;
+            using var brush = new SolidBrush(selected ? Ui.Background : SystemColors.Control);
+            e.Graphics.FillRectangle(brush, e.Bounds);
+            using var font = new Font(tabs.Font, selected ? FontStyle.Bold : FontStyle.Regular);
+            TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, font, e.Bounds, selected ? Ui.Accent : Ui.Ink,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            if (selected) e.Graphics.FillRectangle(Brushes.SeaGreen, e.Bounds.Left + 8, e.Bounds.Bottom - 3, e.Bounds.Width - 16, 3);
+        };
+        foreach (var title in new[] { "상품", "주문기록", "판매처관리", "상품추가", "로그", "설정" })
             tabs.TabPages.Add(new TabPage(title) { BackColor = Ui.Background, Padding = new Padding(8) });
         Controls.Add(tabs);
         ResumeLayout(false);

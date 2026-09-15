@@ -6,20 +6,28 @@ internal sealed class CartProductRow : BufferedPanel
     private readonly TextBox title, price;
     private readonly Label quantity;
     private readonly Button? minus, plus, order;
+    private readonly Button remove;
+    private readonly SampleData data;
     public CartLine Line { get; }
-    public CartProductRow(SampleData data, CartLine line)
+    public CartProductRow(SampleData data, CartLine line, bool inOrder = false)
     {
         SuspendLayout();
+        this.data = data;
         Line = line; Name = $"CartRow_{line.Product.Id}"; BackColor = Color.White;
         image = SampleImages.Picture(line.Product.Category, $"CartImage_{line.Product.Id}");
         title = Ui.CopyText(line.Product.Name, $"CartName_{line.Product.Id}");
         price = Ui.CopyText($"{line.Product.Price:N0}원", $"CartPrice_{line.Product.Id}");
         quantity = new Label { Name = $"Quantity_{line.Product.Id}", TextAlign = ContentAlignment.MiddleCenter };
-        Controls.AddRange([image, title, price]);
+        remove = Ui.Button("X", () => data.Remove(line), name: $"Remove_{line.Product.Id}");
+        remove.AutoSize = false; remove.MinimumSize = new Size(30, 30); remove.Padding = Padding.Empty;
+        Controls.AddRange([image, title, price, remove]);
         if (line.Product.Supplier.Manual)
         {
-            order = Ui.Button("사이트에서 주문하기", () => { using var form = new OrderForm(data, [line], true); form.ShowDialog(FindForm()); }, true, $"Manual_{line.Product.Id}");
-            order.AutoSize = false; Controls.Add(order);
+            if (!inOrder)
+            {
+                order = Ui.Button("판매처에서 주문하기", () => { using var form = new OrderForm(data, [line], true); form.ShowDialog(FindForm()); }, true, $"Manual_{line.Product.Id}");
+                order.AutoSize = false; Controls.Add(order);
+            }
         }
         else
         {
@@ -30,18 +38,25 @@ internal sealed class CartProductRow : BufferedPanel
         }
         RefreshQuantity(); ResumeLayout(false);
     }
-    public void RefreshQuantity() { if (quantity.Text != Line.Quantity.ToString()) quantity.Text = Line.Quantity.ToString(); }
-    public override Size GetPreferredSize(Size proposedSize) => new(proposedSize.Width, Math.Max(19, Font.Height) * 5 + 34);
+    public void RefreshQuantity()
+    {
+        if (quantity.Text != Line.Quantity.ToString()) quantity.Text = Line.Quantity.ToString();
+        bool editable = !data.IsLocked(Line.Product);
+        remove.Enabled = editable; if (minus != null) minus.Enabled = editable; if (plus != null) plus.Enabled = editable;
+        if (order != null) order.Enabled = editable;
+    }
+    public override Size GetPreferredSize(Size proposedSize) => new(proposedSize.Width, Math.Max(19, Font.Height) * 5 + 42);
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e); if (image == null) return;
         int unit = Math.Max(19, Font.Height), thumb = Math.Max(58, unit * 3), x = thumb + 8, width = Math.Max(70, Width - x);
         image.SetBounds(0, 4, thumb, thumb);
-        title.SetBounds(x, 2, width, unit * 3 + 2);
+        remove.SetBounds(Width - 30, 2, 30, 30);
+        title.SetBounds(x, 2, Math.Max(40, width - 34), unit * 3 + 2);
         price.SetBounds(x, title.Bottom + 2, width, unit + 3);
         int y = price.Bottom + 4, buttonSize = Math.Max(36, unit + 14);
-        if (order != null) order.SetBounds(x, y, width, buttonSize);
-        else
+        if (order != null) order.SetBounds(x, y, width, Ui.ActionHeight(this));
+        else if (minus != null)
         {
             minus!.SetBounds(x, y, buttonSize, buttonSize); quantity.SetBounds(x + buttonSize, y, buttonSize, buttonSize);
             plus!.SetBounds(x + buttonSize * 2, y, buttonSize, buttonSize);
@@ -49,12 +64,13 @@ internal sealed class CartProductRow : BufferedPanel
     }
 }
 
-internal sealed class SupplierCartCard : BufferedPanel
+internal sealed class SupplierCartCard : SoftPanel
 {
     private readonly SampleData data;
     private readonly Supplier supplier;
     private readonly Action<CartLine[]> open;
-    private readonly Label heading, subtotal;
+    private readonly Control heading;
+    private readonly Label subtotal;
     private readonly Button order;
     private readonly Dictionary<int, CartProductRow> rows = [];
     private CartLine[] lines = [];
@@ -62,7 +78,7 @@ internal sealed class SupplierCartCard : BufferedPanel
     {
         this.data = data; this.supplier = supplier; this.open = open;
         Name = $"Cart_{supplier.Id}"; BackColor = Color.White; Margin = new Padding(0, 0, 0, 10);
-        heading = Ui.Text(supplier.Name, true); heading.Dock = DockStyle.None; heading.AutoSize = false;
+        heading = Ui.SellerHeading(supplier); heading.Dock = DockStyle.None; heading.AutoSize = false;
         subtotal = Ui.Text("", true); subtotal.Dock = DockStyle.None; subtotal.AutoSize = false;
         order = Ui.Button("주문하기", () => { if (data.Shortfall(supplier, lines) == 0) open(lines); }, true, $"SupplierOrder_{supplier.Id}");
         order.AutoSize = false; Controls.Add(heading);
@@ -95,7 +111,7 @@ internal sealed class SupplierCartCard : BufferedPanel
     {
         base.OnLayout(e); if (heading == null) return;
         int unit = Math.Max(19, Font.Height), x = 10, width = Math.Max(100, Width - 20), y = 10;
-        heading.SetBounds(x, y, width, unit + 8); y += heading.Height + 6;
+        heading.SetBounds(x, y, width, Math.Max(36, unit + 12)); y += heading.Height + 6;
         foreach (var line in lines)
         {
             var row = rows[line.Product.Id]; int height = row.GetPreferredSize(new Size(width, 0)).Height;

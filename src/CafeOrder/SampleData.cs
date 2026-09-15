@@ -1,9 +1,10 @@
 namespace CafeOrder;
 
-public record Supplier(string Id, string Name, bool Manual, decimal FreeShipping, bool SampleNaverLogin = false);
+public record Supplier(string Id, string Name, bool Manual, decimal FreeShipping, bool SupportsNaverLogin = false);
 public record Product(int Id, string Name, decimal Price, string PriceNote,
     Supplier Supplier, string Category, bool Available, int SampleOrderCount)
 {
+    public bool Available { get; set; } = Available;
     // Deliberately non-routable sample URLs; the mockup never opens these.
     public string Url => $"https://example.invalid/product/{Id}";
     public string PriceText => $"{Price:N0}원{(PriceNote.Length == 0 ? "" : $" ({PriceNote})")}";
@@ -20,7 +21,7 @@ public sealed class SampleData
     public static readonly string[] Categories = ["전체", "원두", "일회용품", "유제품", "파우더", "베이스/농축액", "시럽/소스", "과일", "티백", "청", "디저트/스낵", "기타"];
     public List<Supplier> Suppliers { get; } =
     [
-        new("mega", "메가커피", false, 50000, true), new("piece", "파미유", false, 99000),
+        new("mega", "메가커피", false, 50000), new("piece", "파미유", false, 99000),
         new("food", "푸드레인", false, 0), new("wym", "우양", false, 30000),
         new("nuldam", "늘담", false, 100000), new("coupang", "쿠팡", true, 0),
         new("naver", "네이버 스마트스토어", true, 0)
@@ -29,6 +30,20 @@ public sealed class SampleData
     public List<CartLine> Cart { get; } = [];
     public Dictionary<string, decimal> Shipping { get; } = [];
     public event Action? CartChanged;
+    public event Action<string>? ToastRequested;
+    public event Action<string>? ProductAdded;
+    public event Action<Product>? ProductChanged;
+    private readonly HashSet<int> locked = [];
+    public bool IsLocked(Product product) => locked.Contains(product.Id);
+    public void Lock(IEnumerable<CartLine> lines) { foreach (var line in lines) locked.Add(line.Product.Id); Notify(); }
+    public void Unlock(IEnumerable<CartLine> lines) { foreach (var line in lines) locked.Remove(line.Product.Id); Notify(); }
+    public void Toast(string text) => ToastRequested?.Invoke(text);
+    public void Recheck(Product product)
+    {
+        if (product.Supplier.Manual) return;
+        product.Available = product.Id == 12; // Cream restocks; mango remains unavailable in the mock.
+        ProductChanged?.Invoke(product); Toast("상품 정보를 다시 확인했습니다");
+    }
 
     public SampleData()
     {
@@ -67,18 +82,24 @@ public sealed class SampleData
 
     public void AddToCart(Product p)
     {
-        if (!p.Available) return;
+        if (!p.Available || IsLocked(p)) return;
         var line = Cart.Find(x => x.Product.Id == p.Id);
         if (line == null) Cart.Add(new(p, p.Supplier.Manual ? 0 : 1));
         else if (!p.Supplier.Manual) line.Quantity++;
         Notify();
+        ProductAdded?.Invoke(p.Supplier.Id); Toast("장바구니에 추가했습니다");
     }
     public void ChangeQuantity(CartLine line, int change)
     {
-        if (line.Product.Supplier.Manual) return;
+        if (line.Product.Supplier.Manual || IsLocked(line.Product) || !Cart.Contains(line)) return;
         line.Quantity = Math.Max(0, line.Quantity + change);
-        if (line.Quantity == 0) Cart.Remove(line);
+        if (line.Quantity == 0) { Remove(line); return; }
         Notify();
+    }
+    public void Remove(CartLine line)
+    {
+        if (IsLocked(line.Product) || !Cart.Remove(line)) return;
+        Notify(); Toast("장바구니에서 삭제했습니다");
     }
     public void Complete(IEnumerable<CartLine> lines)
     {

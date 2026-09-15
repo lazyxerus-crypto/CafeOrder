@@ -3,16 +3,26 @@ namespace CafeOrder;
 public partial class MainForm : Form
 {
     private readonly SampleData sample = new();
+    private readonly ToastHost toast = new();
     public MainForm()
     {
         InitializeComponent();
         tabs.TabPages[0].Controls.Add(new ProductsView(sample));
-        tabs.TabPages[1].Controls.Add(OtherPages.History());
+        tabs.TabPages[1].Controls.Add(OtherPages.History(sample));
         tabs.TabPages[2].Controls.Add(OtherPages.Suppliers(sample));
         tabs.TabPages[3].Controls.Add(OtherPages.AddProduct(sample));
-        tabs.TabPages[4].Controls.Add(OtherPages.Logs());
+        tabs.TabPages[4].Controls.Add(OtherPages.Logs(sample));
         tabs.TabPages[5].Controls.Add(OtherPages.Settings());
+        sample.ToastRequested += ShowToast;
+        LocationChanged += (_, _) => toast.Reposition(); SizeChanged += (_, _) => toast.Reposition();
     }
+    private void ShowToast(string message)
+    {
+        var owner = Application.OpenForms.OfType<OrderForm>().LastOrDefault(f => f.Visible) as Form ?? this;
+        toast.Notify(owner, message);
+    }
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    { sample.ToastRequested -= ShowToast; toast.Dispose(); base.OnFormClosed(e); }
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
