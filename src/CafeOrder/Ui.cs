@@ -5,6 +5,15 @@ internal static class Ui
     public static readonly Color Ink = Color.FromArgb(36, 49, 47);
     public static readonly Color Accent = Color.FromArgb(37, 103, 83);
     public static readonly Color Background = Color.FromArgb(244, 246, 243);
+    public static readonly Color Danger = Color.FromArgb(173, 53, 53);
+
+    public static TextBox CopyText(string text, string name, bool heading = false) => new()
+    {
+        Name = name, Text = text, ReadOnly = true, BorderStyle = BorderStyle.None,
+        Multiline = true, WordWrap = true, ScrollBars = ScrollBars.None, BackColor = Color.White,
+        ForeColor = Ink, Font = new Font("Malgun Gothic", heading ? 12 : 11.5f, heading ? FontStyle.Bold : FontStyle.Regular),
+        ShortcutsEnabled = true, TabStop = true
+    };
 
     public static Label Text(string text, bool heading = false) => new()
     {
@@ -14,7 +23,7 @@ internal static class Ui
     };
     public static Button Button(string text, Action action, bool primary = false, string? name = null)
     {
-        var b = new Button { Text = text, Name = name ?? text, AutoSize = true,
+        var b = new ActionButton { Text = text, Name = name ?? text, AutoSize = true,
             MinimumSize = new Size(44, 40), Padding = new Padding(8, 4, 8, 4),
             Margin = new Padding(4), FlatStyle = FlatStyle.Flat,
             BackColor = primary ? Accent : Color.White, ForeColor = primary ? Color.White : Ink,
@@ -51,21 +60,26 @@ internal static class Ui
     }
     public static FlowLayoutPanel List(string name)
     {
-        var list = new FlowLayoutPanel { Name = name, Dock = DockStyle.Fill, AutoScroll = true,
+        var list = new BufferedFlowPanel { Name = name, Dock = DockStyle.Fill, AutoScroll = true,
             FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Background, Padding = new Padding(8) };
         list.ClientSizeChanged += (_, _) => Fit(list);
-        list.ControlAdded += (_, _) => Fit(list);
+        list.ControlAdded += (_, e) => { if (e.Control != null) FitItem(list, e.Control); };
         return list;
     }
     public static void Fit(FlowLayoutPanel list)
     {
+        list.SuspendLayout();
+        foreach (Control c in list.Controls) FitItem(list, c);
+        list.ResumeLayout(false);
+    }
+    private static void FitItem(FlowLayoutPanel list, Control c)
+    {
         int width = Math.Max(120, list.ClientSize.Width - list.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth - 4);
-        foreach (Control c in list.Controls)
-        {
-            c.Width = width;
-            c.MinimumSize = new Size(width, 0);
-            c.MaximumSize = new Size(width, 0);
-        }
+        if (c.Width == width && c.MaximumSize.Width == width) return;
+        c.MinimumSize = Size.Empty;
+        c.MaximumSize = new Size(width, 0);
+        c.Width = width;
+        if (c.AutoSize) c.MinimumSize = new Size(width, 0);
     }
     public static void Clear(Control parent)
     {
@@ -81,4 +95,26 @@ internal static class Ui
     }
     public static void Notice(IWin32Window owner, string text)
         => MessageBox.Show(owner, text, "CafeOrder · UI 목업", MessageBoxButtons.OK, MessageBoxIcon.Information);
+}
+
+internal class BufferedPanel : Panel
+{
+    public BufferedPanel() => DoubleBuffered = true;
+}
+internal sealed class BufferedFlowPanel : FlowLayoutPanel
+{
+    public BufferedFlowPanel() => DoubleBuffered = true;
+}
+
+// Disabled shortage actions retain an explicit red/white, readable treatment.
+internal sealed class ActionButton : Button
+{
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (Enabled) { base.OnPaint(e); return; }
+        e.Graphics.Clear(BackColor);
+        ControlPaint.DrawBorder(e.Graphics, ClientRectangle, FlatAppearance.BorderColor, ButtonBorderStyle.Solid);
+        TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ForeColor,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+    }
 }

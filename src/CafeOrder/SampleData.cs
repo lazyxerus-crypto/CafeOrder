@@ -1,6 +1,6 @@
 namespace CafeOrder;
 
-public record Supplier(string Id, string Name, bool Manual, decimal FreeShipping);
+public record Supplier(string Id, string Name, bool Manual, decimal FreeShipping, bool SampleNaverLogin = false);
 public record Product(int Id, string Name, decimal Price, string PriceNote,
     Supplier Supplier, string Category, bool Available, int SampleOrderCount)
 {
@@ -20,7 +20,7 @@ public sealed class SampleData
     public static readonly string[] Categories = ["전체", "원두", "일회용품", "유제품", "파우더", "베이스/농축액", "시럽/소스", "과일", "티백", "청", "디저트/스낵", "기타"];
     public List<Supplier> Suppliers { get; } =
     [
-        new("mega", "메가커피", false, 50000), new("piece", "파미유", false, 99000),
+        new("mega", "메가커피", false, 50000, true), new("piece", "파미유", false, 99000),
         new("food", "푸드레인", false, 0), new("wym", "우양", false, 30000),
         new("nuldam", "늘담", false, 100000), new("coupang", "쿠팡", true, 0),
         new("naver", "네이버 스마트스토어", true, 0)
@@ -86,4 +86,26 @@ public sealed class SampleData
         Notify();
     }
     public void Notify() => CartChanged?.Invoke();
+
+    public decimal Subtotal(IEnumerable<CartLine> lines) => lines.Sum(x => x.Product.Price * x.Quantity);
+    public decimal Shortfall(Supplier supplier, IEnumerable<CartLine> lines)
+        => supplier.Manual ? 0 : Math.Max(0, Shipping[supplier.Id] - Subtotal(lines));
+
+    public Supplier? DetectSupplier(string text)
+    {
+        if (!Uri.TryCreate(text.Trim(), UriKind.Absolute, out var uri) ||
+            (uri.Scheme != "http" && uri.Scheme != "https") || uri.UserInfo.Length != 0) return null;
+        string host = uri.IdnHost.ToLowerInvariant();
+        // Host-boundary matching only; never inspect URL contents by requesting the site.
+        var suppliedDomains = new Dictionary<string, string>
+        {
+            ["megacoffee.co.kr"] = "mega", ["piececake.co.kr"] = "piece",
+            ["foodrain.com"] = "food", ["nuldampartners.com"] = "nuldam"
+        };
+        foreach (var domain in suppliedDomains)
+            if (host == domain.Key || host == "www." + domain.Key) return Suppliers.Single(x => x.Id == domain.Value);
+        if (host == "coupang.com" || host.EndsWith(".coupang.com")) return Suppliers.Single(x => x.Id == "coupang");
+        if (host is "smartstore.naver.com" or "brand.naver.com") return Suppliers.Single(x => x.Id == "naver");
+        return Suppliers.FirstOrDefault(s => host == $"{s.Id}.example.invalid" || host == $"{s.Id.Replace("mega", "megacoffee")}.example.invalid");
+    }
 }

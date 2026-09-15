@@ -31,6 +31,10 @@ CafeOrder는 여러 카페 식자재 쇼핑몰의 상품을 한 프로그램에�
 
 첫 작업은 프로젝트 규칙과 문서/Git 구조만 만든다. 실제 UI, SQLite schema, DB/주문/로그인 기능, 사이트 자동화/접속, 상품 scraping, Playwright 설치, 불필요한 NuGet 설치, 대규모 architecture 구현은 하지 않는다.
 
+현재는 [UI 2차 목업](UI.md#2차-목업-범위) 단계다. 실제 DB/로그인/브라우저/주문/결제는 여전히 구현하지 않는다. 상품/로그 텍스트 복사, 상품추가 URL 기반 공급처 판별을 지원하고 내부 공급처 유형은 사용자 화면에 표시하지 않는다.
+
+쿠팡/네이버의 수동 완료 기록 버튼을 제거한다. 향후 주문 생성 여부를 가능한 범위에서 자동 확인하되 확실한 성공만 완료하고, 불확실하면 카드를 유지한다. 자동 수량/옵션/결제 및 인증 우회 금지는 유지한다. 구체적인 경계는 [COUPANG_NAVER](suppliers/COUPANG_NAVER.md)를 따른다.
+
 ## 문서 책임
 
 - [UI](UI.md): 탭, 화면, 카테고리, 정렬.
@@ -43,4 +47,4 @@ CafeOrder는 여러 카페 식자재 쇼핑몰의 상품을 한 프로그램에�
 
 과도한 branch 구조 없이 정상 상태를 저장한다. 작업 단위 완료 시 필요한 빌드/검증 → commit → 이미 remote가 있으면 push 순서다. 실패 상태를 정상 버전처럼 저장하지 않는다. remote 부재/인증 실패 시 설정을 강행하지 않고 로컬 commit까지만 수행한 사실을 보고한다.
 
-첫 commit: `chore: establish CafeOrder project rules`. 이번 단계는 코드가 없어 문서/링크/충돌/ignore 검증으로 마무리한다.
+첫 commit: `chore: establish CafeOrder project rules`. 첫 준비 단계에서는 문서/링크/충돌/ignore를 검증했다. UI 작업은 x64 빌드와 주요 화면 검증이 정상 완료된 경우에만 commit한다.
