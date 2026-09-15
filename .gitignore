@@ -1,0 +1,61 @@
+# Build / IDE
+[Bb]in/
+[Oo]bj/
+[Bb]uild/
+[Dd]ist/
+artifacts/
+.vs/
+*.user
+*.suo
+TestResults/
+
+# Local application data and database sidecars/backups
+AppData/
+local-data/
+userdata/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.bak
+backup/
+backups/
+
+# Logs and diagnostics
+logs/
+*.log
+diagnostics/
+*.zip
+
+# Browser profiles, cookies, sessions and cache
+browser-profiles/
+profiles/
+playwright-profiles/
+ms-playwright/
+.playwright/
+playwright-report/
+test-results/
+*cookies*
+*session*
+*storageState*
+*storage-state*
+cache/
+.cache/
+
+# Credentials and sensitive local configuration
+.env
+.env.*
+*password*
+*credential*
+*token*
+*secret*
+*.pfx
+*.p12
+*.pem
+*.key
+settings.json
+settings.local.*
+appsettings.*.json
+*.local.json
