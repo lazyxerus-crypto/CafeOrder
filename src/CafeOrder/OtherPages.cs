@@ -20,17 +20,9 @@ internal static class OtherPages
             header.Controls.Add(Ui.SellerHeading(supplier), 0, 0);
             var status = Ui.Text(state, true); status.TextAlign = ContentAlignment.MiddleRight;
             status.ForeColor = state == "주문완료" ? Ui.Accent : Ui.Danger; header.Controls.Add(status, 1, 0);
-            var table = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 4 };
-            foreach (float width in new[] { 54f, 16f, 10f, 20f }) table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, width));
-            string[] headings = ["상품명", "단가", "수량", "금액"];
-            for (int c = 0; c < 4; c++) table.Controls.Add(Ui.Text(headings[c], true), c, 0);
-            for (int r = 0; r < items.Length; r++)
-            {
-                string[] values = [items[r].Name, items[r].Price, items[r].Qty, items[r].Amount];
-                for (int c = 0; c < 4; c++) table.Controls.Add(Ui.Text(values[c]), c, r + 1);
-            }
-            var payment = Ui.Text($"총 결제 {total}", true); payment.TextAlign = ContentAlignment.MiddleRight;
-            list.Controls.Add(Ui.Column(header, Ui.Text($"주문일시  {time}\n주문번호  {number}"), table, payment));
+            var table = new HistoryItemsTable(items);
+            var payment = Ui.Role(Ui.Text($"총 결제 {total}", true), TypographyKey.HistoryInfo); payment.TextAlign = ContentAlignment.MiddleRight;
+            list.Controls.Add(Ui.Column(header, Ui.Role(Ui.Text($"주문일시  {time}\n주문번호  {number}"), TypographyKey.HistoryInfo), table, payment));
         }
     }
     public static Control Suppliers(SampleData data)
@@ -52,7 +44,7 @@ internal static class OtherPages
             }
             string state = s.Id switch { "mega" => "로그인 완료", "piece" => "로그인 실패", _ => "확인 전" };
             var status = Ui.Text("로그인 상태: " + state); status.ForeColor = state == "로그인 완료" ? Ui.Accent : state == "로그인 실패" ? Ui.Danger : Ui.Ink;
-            var login = Ui.Button(state == "로그인 완료" ? "다시 로그인" : "로그인", () => data.Toast("로그인 연결은 준비 중입니다"), name: $"Login_{s.Id}");
+            var login = Ui.Button(state == "로그인 완료" ? "다시 로그인" : "로그인", () => status.Text = "로그인 연결 준비 중", name: $"Login_{s.Id}");
             var second = Ui.Row(status, login);
             if (!s.Manual)
             {
@@ -60,59 +52,39 @@ internal static class OtherPages
                 threshold.TextChanged += (_, _) => { if (decimal.TryParse(threshold.Text, out var value)) { data.Shipping[s.Id] = value; data.Notify(); } };
                 second.Controls.AddRange([Ui.Text("    무료배송 기준"), threshold, Ui.Text("원")]);
             }
-            list.Controls.Add(Ui.Column(first, second));
+            var card = new SupplierSettingsCard(first, second);
+            caps.VisibleChanged += (_, _) => { if (card.Visible) card.Remeasure(); };
+            list.Controls.Add(card);
         }
         list.ResumeLayout(true); return list;
-    }
-    public static Control AddProduct(SampleData data)
-    {
-        var list = Ui.List("AddProduct");
-        var url = new TextBox { Name = "ProductUrl", Dock = DockStyle.Top, PlaceholderText = "상품 URL을 입력하세요", Margin = new Padding(4) };
-        var detected = Ui.Text("지원하지 않는 주소"); detected.Name = "DetectedSupplier";
-        var category = Ui.Combo(SampleData.Categories.Skip(1), "AddCategory"); category.SelectedItem = "파우더";
-        var preview = new Panel { Name = "ProductPreview", Height = 1, Visible = false, BackColor = Ui.Background };
-        ProductCard? resultCard = null;
-        void LayoutResult()
-        {
-            if (resultCard == null || resultCard.IsDisposed) return;
-            int width = Math.Min(260, Math.Max(160, preview.ClientSize.Width));
-            resultCard.SetBounds(0, 0, width, resultCard.GetPreferredSize(new Size(width, 0)).Height);
-            preview.Height = resultCard.Height;
-        }
-        preview.SizeChanged += (_, _) => LayoutResult();
-        var add = Ui.Button("상품 추가", () =>
-        {
-            var supplier = data.DetectSupplier(url.Text); if (supplier == null) return;
-            var original = data.Products.First(p => p.Supplier.Id == supplier.Id);
-            var sample = original with { Category = category.Text };
-            if (resultCard?.Product == sample) { preview.Visible = true; return; }
-            Ui.Clear(preview);
-            var card = new ProductCard(sample, data);
-            resultCard = card;
-            preview.Controls.Add(card);
-            LayoutResult(); preview.Visible = true;
-        }, true, "AddProductButton");
-        add.Enabled = false;
-        url.TextChanged += (_, _) => { var supplier = data.DetectSupplier(url.Text); detected.Text = supplier?.Name ?? "지원하지 않는 주소"; add.Enabled = supplier != null; };
-        list.Controls.Add(Ui.Column(Ui.Text("상품 URL", true), url, Ui.Text("판매처"), detected, Ui.Text("카테고리"), category, add));
-        list.Controls.Add(preview); return list;
     }
     public static Control Logs(SampleData data)
     {
         var log = new RichTextBox { Name = "LogText", Dock = DockStyle.Fill, ReadOnly = true, BorderStyle = BorderStyle.None,
             BackColor = Color.White, ForeColor = Ui.Ink, DetectUrls = false, ShortcutsEnabled = true,
             Text = "2026-09-15 02:31:00 [INFO] APP: UI 목업 시작\n2026-09-15 02:31:01 [INFO] PRODUCTS: 샘플 상품 24개 준비\n2026-09-15 02:32:00 [INFO] CART: 수량 변경 반영\n2026-09-15 02:33:00 [WARN] ORDER: 주문 결과 확인 필요 (예시)" };
-        var copy = Ui.Button("전체 복사", () =>
+        Ui.Role(log, TypographyKey.Log);
+        var copy = Ui.Button("전체 복사", () => { }, name: "CopyAllLogs");
+        copy.Click += (_, _) =>
         {
-            try { Clipboard.SetText(log.Text); data.Toast("로그 전체를 복사했습니다"); }
-            catch (System.Runtime.InteropServices.ExternalException) { data.Toast("복사하지 못했습니다. 다시 시도해주세요"); }
-        }, name: "CopyAllLogs");
+            try { Clipboard.SetText(log.Text); copy.Text = "복사됨"; }
+            catch (System.Runtime.InteropServices.ExternalException) { copy.Text = "복사 실패 · 다시 시도"; }
+        };
         var toolbar = Ui.Row(copy); toolbar.Dock = DockStyle.Top;
         var panel = new SoftPanel { Dock = DockStyle.Fill }; panel.Controls.Add(log); panel.Controls.Add(toolbar); return panel;
     }
-    public static Control Settings()
+    public static Control Settings(SampleData data, Action columnsChanged, Action openTypography)
     {
         var list = Ui.List("Settings");
+        var columns = Ui.Combo(["3개", "4개", "5개"], "ProductColumnsSetting"); columns.SelectedIndex = data.Store.Preferences.Columns - 3;
+        var status = Ui.Text("");
+        columns.SelectedIndexChanged += (_, _) =>
+        {
+            int previous = data.Store.Preferences.Columns; data.Store.Preferences.Columns = columns.SelectedIndex + 3;
+            try { data.Store.SavePreferences(); columnsChanged(); status.Text = ""; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { data.Store.Preferences.Columns = previous; status.Text = "설정 저장 실패 · 다시 시도해주세요"; }
+        };
+        list.Controls.Add(Ui.Column(Ui.Text("상품 한 줄 표시 개수", true), columns, Ui.Button("글자 크기 상세 설정", openTypography, name: "OpenTypography"), status));
         list.Controls.Add(Ui.Column(Ui.Text("백업", true), Ui.Text("자동 백업 기본 기준: 하루 1회\n프로그램 업데이트 전 · 데이터 형식 변경 전 · 데이터 가져오기 전"),
             Ui.Text("무료배송 기준은 판매처관리에서 확인할 수 있습니다.")));
         return list;

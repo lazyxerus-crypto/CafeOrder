@@ -2,25 +2,27 @@ namespace CafeOrder;
 
 internal static class Ui
 {
+    internal static Typography? Fonts;
+    public static T Role<T>(T control, TypographyKey key, FontStyle? style = null) where T : Control => Fonts?.Bind(control, key, style) ?? control;
     public static readonly Color Ink = Color.FromArgb(36, 49, 47);
     public static readonly Color Accent = Color.FromArgb(37, 103, 83);
     public static readonly Color Background = Color.FromArgb(244, 246, 243);
     public static readonly Color Danger = Color.FromArgb(173, 53, 53);
 
-    public static TextBox CopyText(string text, string name, bool heading = false) => new ScrollCopyTextBox()
+    public static TextBox CopyText(string text, string name, bool heading = false) => Role(new ScrollCopyTextBox()
     {
         Name = name, Text = text, ReadOnly = true, BorderStyle = BorderStyle.None,
         Multiline = true, WordWrap = true, ScrollBars = ScrollBars.None, BackColor = Color.White,
         ForeColor = Ink, Font = new Font("Malgun Gothic", heading ? 12 : 11.5f, heading ? FontStyle.Bold : FontStyle.Regular),
         ShortcutsEnabled = true, TabStop = true
-    };
+    }, TypographyKey.General);
 
-    public static Label Text(string text, bool heading = false) => new()
+    public static Label Text(string text, bool heading = false) => Role(new Label()
     {
         Text = text, AutoSize = true, ForeColor = Ink, Margin = new Padding(4, 5, 4, 5),
         Font = new Font("Malgun Gothic", heading ? 13 : 11.5f, heading ? FontStyle.Bold : FontStyle.Regular),
         Dock = DockStyle.Top, UseMnemonic = false
-    };
+    }, heading ? TypographyKey.SectionTitle : TypographyKey.General);
     public static Button Button(string text, Action action, bool primary = false, string? name = null)
     {
         var b = new ActionButton { Text = text, Name = name ?? text, AutoSize = true,
@@ -30,13 +32,14 @@ internal static class Ui
             Cursor = Cursors.Hand, UseMnemonic = false };
         b.FlatAppearance.BorderColor = Color.FromArgb(201, 211, 205);
         b.Click += (_, _) => action();
+        Role(b, TypographyKey.Button); b.FontChanged += (_, _) => { if (!b.AutoSize) b.Height = ActionHeight(b); };
         return b;
     }
     public static ComboBox Combo(IEnumerable<string> items, string name)
     {
         var c = new ComboBox { Name = name, DropDownStyle = ComboBoxStyle.DropDownList,
             Dock = DockStyle.Fill, Margin = new Padding(4, 6, 4, 6), IntegralHeight = true };
-        c.Items.AddRange(items.Cast<object>().ToArray()); c.SelectedIndex = 0; return c;
+        c.Items.AddRange(items.Cast<object>().ToArray()); c.SelectedIndex = 0; return Role(c, TypographyKey.General);
     }
     public static TableLayoutPanel Column(params Control[] controls)
     {
@@ -106,6 +109,7 @@ internal static class Ui
     public static Label SectionHeading(string text)
     {
         var label = Text(text, true); label.AutoSize = false; label.Height = 36;
+        label.FontChanged += (_, _) => label.Height = Math.Max(36, label.Font.Height + 12);
         label.Padding = new Padding(8, 4, 0, 0); label.Margin = Padding.Empty; return label;
     }
     public static Control SellerHeading(Supplier supplier)
@@ -115,7 +119,14 @@ internal static class Ui
         row.Controls.Add(new PictureBox { Image = SampleImages.Seller(supplier), SizeMode = PictureBoxSizeMode.Zoom, Width = 30, Height = 30, Margin = new Padding(3) }, 0, 0);
         row.Controls.Add(Text(supplier.Name, true), 1, 0); return row;
     }
-    public static int ActionHeight(Control c) => Math.Max(40, c.Font.Height * 2);
+    public static int ActionHeight(Control c, int? width = null) => Math.Max(Math.Max(40, c.Font.Height * 2), TextRenderer.MeasureText(c.Text, c.Font,
+        new Size(Math.Max(24, (width ?? c.Width) - c.Padding.Horizontal - 4), 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height + c.Padding.Vertical + 4);
+}
+
+internal static class NativeUi
+{
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    internal static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
 }
 
 internal class BufferedPanel : Panel
@@ -152,7 +163,7 @@ internal sealed class CardTable : TableLayoutPanel
         foreach (Control child in Controls)
         {
             int inner = Math.Max(40, width - Padding.Horizontal - child.Margin.Horizontal);
-            height += child.GetPreferredSize(new Size(inner, 0)).Height + child.Margin.Vertical;
+            height += (child is Button { AutoSize: false } ? child.Height : child.GetPreferredSize(new Size(inner, 0)).Height) + child.Margin.Vertical;
         }
         return new Size(width, height);
     }

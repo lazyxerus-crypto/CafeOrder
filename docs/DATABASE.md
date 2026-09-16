@@ -22,3 +22,9 @@ CafeOrder는 상품 데이터 수집 프로그램이 아니다. 사이트에 표
 ID/PW가 필요하면 Windows 보안 저장소를 사용한다. SQLite/settings.json 평문 비밀번호 저장 금지. 로그에 비밀번호, 쿠키, token을 기록하지 않는다.
 
 실사용 SQLite DB 및 부속 파일, DB 백업, 로그, diagnostic zip, 브라우저 프로필, 쿠키/세션/cache, ID/PW, token, secret, 민감한 로컬 설정을 Git/GitHub에 올리지 않는다. `.gitignore`는 예방 장치이므로 commit 전 staged 파일도 확인한다. 브라우저 로그인 상태의 로컬 보관 방식은 ORDER_FLOW를 따른다.
+
+## 5차 목업 임시 상태
+
+실제 SQLite/schema 구현 전의 최소 파일 저장만 허용한다. `%LOCALAPPDATA%\CafeOrder\Mockup`의 `catalog-state.json`은 샘플 등록 상품·카테고리·IsActive를, `ui-state.json`은 창/열/글자 크기를 저장한다. 임시 파일을 쓴 뒤 교체하며 읽을 수 없는 설정은 기본값을 사용한다. 저장 실패를 성공으로 표시하지 않는다. 빈 Draft/장바구니/주문기록/자격정보는 저장 대상이 아니다.
+
+`manual-images/{ProductId}.webp`는 사용자 이미지의 중심 정사각 Crop/Quality 80 결과다. 수동 이미지 삭제는 이 파일만 제거한다. 향후 IsActive 및 등록 정보는 SQLite로 이전하고, xlsx는 IProductWorkbook을 통한 대량편집 입출력만 맡는다. 실행 DB로 사용하지 않는다.

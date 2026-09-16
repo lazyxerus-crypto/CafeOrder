@@ -29,7 +29,13 @@ public sealed class OrderForm : Form
         var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.RightToLeft };
         var close = Ui.Button("닫기", Close, name: "CloseOrders");
         startAll = Ui.Button("전체 주문하기", StartAll, true, "StartAllOrders");
-        foreach (var button in new[] { close, startAll }) { button.AutoSize = false; button.Size = new Size(170, 42); }
+        void FitFooter()
+        {
+            int width = Math.Max(170, new[] { close, startAll }.Max(b => TextRenderer.MeasureText(b.Text, b.Font).Width + b.Padding.Horizontal + 12));
+            int height = new[] { close, startAll }.Max(b => Ui.ActionHeight(b, width));
+            foreach (var button in new[] { close, startAll }) button.Size = new Size(width, height);
+        }
+        foreach (var button in new[] { close, startAll }) { button.AutoSize = false; button.FontChanged += (_, _) => FitFooter(); } FitFooter();
         footer.Controls.Add(startAll); footer.Controls.Add(close); Controls.Add(list); Controls.Add(footer);
         foreach (var group in targets.GroupBy(x => x.Product.Supplier))
         {
@@ -55,11 +61,11 @@ public sealed class OrderForm : Form
     private void AddCard(Supplier supplier, List<CartLine> lines, string state)
     {
         var card = new OrderCard(supplier, state) { Lines = lines };
-        card.Status = Ui.Text(""); card.Status.Name = $"OrderStatus_{lines[0].Product.Id}";
+        card.Status = Ui.Role(Ui.Text(""), TypographyKey.OrderInfo); card.Status.Name = $"OrderStatus_{lines[0].Product.Id}";
         card.Items = Ui.Column(); card.Items.Padding = Padding.Empty;
-        card.Total = Ui.Text("", true);
+        card.Total = Ui.Role(Ui.Text("", true), TypographyKey.OrderInfo);
         card.Action = Ui.Button(supplier.Manual ? "판매처에서 주문하기" : "주문하기", () => StartOne(card), true, $"OrderAction_{lines[0].Product.Id}");
-        card.Action.AutoSize = false; card.Action.Size = new Size(220, 44);
+        card.Action.AutoSize = false; card.Action.Size = new Size(220, Ui.ActionHeight(card.Action, 220));
         card.View = Ui.Column(Ui.SellerHeading(supplier), card.Status, card.Items, card.Total, card.Action);
         card.View.Name = $"Order_{supplier.Id}_{lines[0].Product.Id}"; cards.Add(card); list.Controls.Add(card.View);
     }

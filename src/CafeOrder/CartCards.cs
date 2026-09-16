@@ -16,9 +16,9 @@ internal sealed class CartProductRow : BufferedPanel
         this.data = data; compact = inOrder;
         Line = line; Name = $"CartRow_{line.Product.Id}"; BackColor = Color.White;
         image = SampleImages.Picture(line.Product.Category, $"CartImage_{line.Product.Id}");
-        title = Ui.CopyText(line.Product.Name, $"CartName_{line.Product.Id}");
-        price = Ui.CopyText($"{line.Product.Price:N0}원", $"CartPrice_{line.Product.Id}");
-        quantity = new Label { Name = $"Quantity_{line.Product.Id}", TextAlign = ContentAlignment.MiddleCenter };
+        title = Ui.Role(Ui.CopyText(line.Product.Name, $"CartName_{line.Product.Id}"), inOrder ? TypographyKey.OrderProductName : TypographyKey.CartProductName);
+        price = Ui.Role(Ui.CopyText($"{line.Product.Price:N0}원", $"CartPrice_{line.Product.Id}"), inOrder ? TypographyKey.OrderInfo : TypographyKey.CartPrice);
+        quantity = Ui.Role(new Label { Name = $"Quantity_{line.Product.Id}", TextAlign = ContentAlignment.MiddleCenter }, TypographyKey.General);
         remove = Ui.Button("X", () => data.Remove(line), name: $"Remove_{line.Product.Id}");
         remove.AutoSize = false; remove.MinimumSize = new Size(30, 30); remove.Padding = Padding.Empty;
         Controls.AddRange([image, title, price, remove]);
@@ -37,6 +37,7 @@ internal sealed class CartProductRow : BufferedPanel
             foreach (var button in new[] { minus, plus }) { button.AutoSize = false; button.MinimumSize = new Size(36, 36); button.Padding = Padding.Empty; }
             Controls.AddRange([minus, quantity, plus]);
         }
+        foreach (Control child in Controls) child.FontChanged += (_, _) => { PerformLayout(); Parent?.PerformLayout(); };
         RefreshQuantity(); ResumeLayout(false);
     }
     public void RefreshQuantity()
@@ -48,35 +49,43 @@ internal sealed class CartProductRow : BufferedPanel
     }
     public void Highlight(bool active)
     { BackColor = title.BackColor = price.BackColor = active ? Color.FromArgb(221, 238, 225) : Color.White; }
+    private int Thumb => Math.Max(58, 66 * DeviceDpi / 96);
+    private int PriceHeight(int rowWidth)
+    {
+        int width = Math.Max(40, rowWidth - Thumb - 12);
+        int lines = Math.Max(1, (int)Math.Ceiling((double)TextRenderer.MeasureText(price.Text, price.Font).Width / width));
+        return price.Font.Height * lines + 3;
+    }
     private int TitleHeight(int width)
     {
-        int unit = Math.Max(19, Font.Height);
-        if (!compact) return unit * 3 + 2;
-        int textWidth = Math.Max(40, width - Math.Max(58, unit * 3) - 8 - 34);
-        return TextRenderer.MeasureText(title.Text, title.Font, new Size(textWidth, 0),
+        int textWidth = Math.Max(40, width - Thumb - 8 - RemoveSize - 8);
+        int measured = TextRenderer.MeasureText(title.Text, title.Font, new Size(textWidth, 0),
             TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height + 2;
+        return compact ? measured : Math.Max(title.Font.Height * 3 + 2, measured);
     }
     public override Size GetPreferredSize(Size proposedSize)
     {
-        int unit = Math.Max(19, Font.Height), contentBottom = TitleHeight(proposedSize.Width) + unit + 7;
-        if (order != null) contentBottom += 4 + Ui.ActionHeight(this);
-        else if (minus != null) contentBottom += 4 + Math.Max(36, unit + 14);
-        return new(proposedSize.Width, Math.Max(contentBottom, 4 + Math.Max(58, unit * 3)) + 4);
+        int contentBottom = TitleHeight(proposedSize.Width) + PriceHeight(proposedSize.Width) + 4;
+        if (order != null) contentBottom += 4 + Ui.ActionHeight(order, Math.Max(40, proposedSize.Width - Thumb - 12));
+        else if (minus != null) contentBottom += 4 + Math.Max(36, minus.Font.Height + 14);
+        return new(proposedSize.Width, Math.Max(contentBottom, 4 + Thumb) + 4);
     }
+    private int RemoveSize => Math.Max(30, remove.Font.Height + 6);
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e); if (image == null) return;
-        int unit = Math.Max(19, Font.Height), thumb = Math.Max(58, unit * 3), x = thumb + 8, width = Math.Max(70, Width - x);
+        int unit = Math.Max(19, Font.Height), thumb = Thumb, x = thumb + 8, width = Math.Max(40, Width - x - 4);
         image.SetBounds(0, 4, thumb, thumb);
-        remove.SetBounds(Width - 30, 2, 30, 30);
-        title.SetBounds(x, 2, Math.Max(40, width - 34), TitleHeight(Width));
-        price.SetBounds(x, title.Bottom + 2, width, unit + 3);
-        int y = price.Bottom + 4, buttonSize = Math.Max(36, unit + 14);
-        if (order != null) order.SetBounds(x, y, width, Ui.ActionHeight(this));
+        remove.SetBounds(Width - RemoveSize - 4, 2, RemoveSize, RemoveSize);
+        title.SetBounds(x, 2, Math.Max(24, width - RemoveSize - 4), TitleHeight(Width));
+        price.SetBounds(x, title.Bottom + 2, width, PriceHeight(Width));
+        int y = price.Bottom + 4, buttonSize = Math.Max(36, (minus?.Font.Height ?? unit) + 14);
+        if (order != null) order.SetBounds(x, y, width, Ui.ActionHeight(order, width));
         else if (minus != null)
         {
-            minus!.SetBounds(x, y, buttonSize, buttonSize); quantity.SetBounds(x + buttonSize, y, buttonSize, buttonSize);
-            plus!.SetBounds(x + buttonSize * 2, y, buttonSize, buttonSize);
+            int actionX = Math.Max(0, Math.Min(x, Width - buttonSize * 3 - 4));
+            minus!.SetBounds(actionX, y, buttonSize, buttonSize); quantity.SetBounds(actionX + buttonSize, y, buttonSize, buttonSize);
+            plus!.SetBounds(actionX + buttonSize * 2, y, buttonSize, buttonSize);
         }
     }
 }
@@ -129,7 +138,7 @@ internal sealed class SupplierCartCard : SoftPanel
     {
         base.OnLayout(e); if (heading == null) return;
         int unit = Math.Max(19, Font.Height), x = 10, width = Math.Max(100, Width - 20), y = 10;
-        heading.SetBounds(x, y, width, Math.Max(36, unit + 12)); y += heading.Height + 6;
+        heading.SetBounds(x, y, width, Math.Max(36, heading.GetPreferredSize(new Size(width, 0)).Height)); y += heading.Height + 6;
         foreach (var line in lines)
         {
             var row = rows[line.Product.Id]; int height = row.GetPreferredSize(new Size(width, 0)).Height;
@@ -137,8 +146,8 @@ internal sealed class SupplierCartCard : SoftPanel
         }
         if (!supplier.Manual)
         {
-            subtotal.SetBounds(x, y, width, unit + 8); y += subtotal.Height + 6;
-            order.SetBounds(x, y, width, Math.Max(40, unit * 2)); y += order.Height + 10;
+            subtotal.SetBounds(x, y, width, subtotal.Font.Height + 8); y += subtotal.Height + 6;
+            order.SetBounds(x, y, width, Ui.ActionHeight(order, width)); y += order.Height + 10;
         }
         if (Height != y + 4) Height = y + 4;
     }

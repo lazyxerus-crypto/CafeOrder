@@ -9,6 +9,7 @@ partial class MainForm
     {
         if (disposing) components?.Dispose();
         base.Dispose(disposing);
+        if (disposing) typography?.Dispose();
     }
     private void InitializeComponent()
     {
@@ -37,7 +38,7 @@ partial class MainForm
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             if (selected) e.Graphics.FillRectangle(Brushes.SeaGreen, e.Bounds.Left + 8, e.Bounds.Bottom - 3, e.Bounds.Width - 16, 3);
         };
-        foreach (var title in new[] { "상품", "주문기록", "판매처관리", "상품추가", "로그", "설정" })
+        foreach (var title in new[] { "상품", "주문기록", "판매처관리", "로그", "설정" })
             tabs.TabPages.Add(new TabPage(title) { BackColor = Ui.Background, Padding = new Padding(8) });
         Controls.Add(tabs);
         ResumeLayout(false);
