@@ -30,14 +30,14 @@ public sealed class SampleData
     public List<CartLine> Cart { get; } = [];
     public Dictionary<string, decimal> Shipping { get; } = [];
     public event Action? CartChanged;
-    public event Action<string>? ToastRequested;
-    public event Action<string>? ProductAdded;
+    public event Action<string, string?>? ToastRequested;
+    public event Action<Product>? ProductAdded;
     public event Action<Product>? ProductChanged;
     private readonly HashSet<int> locked = [];
     public bool IsLocked(Product product) => locked.Contains(product.Id);
     public void Lock(IEnumerable<CartLine> lines) { foreach (var line in lines) locked.Add(line.Product.Id); Notify(); }
     public void Unlock(IEnumerable<CartLine> lines) { foreach (var line in lines) locked.Remove(line.Product.Id); Notify(); }
-    public void Toast(string text) => ToastRequested?.Invoke(text);
+    public void Toast(string text, string? key = null) => ToastRequested?.Invoke(text, key);
     public void Recheck(Product product)
     {
         if (product.Supplier.Manual) return;
@@ -84,10 +84,11 @@ public sealed class SampleData
     {
         if (!p.Available || IsLocked(p)) return;
         var line = Cart.Find(x => x.Product.Id == p.Id);
-        if (line == null) Cart.Add(new(p, p.Supplier.Manual ? 0 : 1));
+        if (line == null) line = new(p, p.Supplier.Manual ? 0 : 1);
         else if (!p.Supplier.Manual) line.Quantity++;
+        Cart.Remove(line); Cart.Insert(0, line);
         Notify();
-        ProductAdded?.Invoke(p.Supplier.Id); Toast("장바구니에 추가했습니다");
+        ProductAdded?.Invoke(p); Toast($"{p.Name}를 장바구니에 추가했습니다", $"add:{p.Id}");
     }
     public void ChangeQuantity(CartLine line, int change)
     {

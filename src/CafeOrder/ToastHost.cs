@@ -6,13 +6,16 @@ namespace CafeOrder;
 // keep clicks/wheel/focus on the underlying application; there are no child HWNDs.
 internal sealed class ToastHost : Form
 {
-    private readonly List<(string Text, long Expires)> messages = [];
+    private readonly List<(string Text, string? Key, long Expires)> messages = [];
     private readonly System.Windows.Forms.Timer expiry = new();
-    private Form? anchor;
+    internal Control? AnchorRegion;
+    private int Inset => 10;
+    private int Gap => 8;
+    private int CardHeight => Font.Height + 12;
     public ToastHost()
     {
         Name = "ToastHost"; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false;
-        StartPosition = FormStartPosition.Manual; BackColor = Ui.Accent; ForeColor = Color.White;
+        StartPosition = FormStartPosition.Manual; BackColor = Color.Magenta; TransparencyKey = BackColor; ForeColor = Color.White;
         Font = new Font("Malgun Gothic", 11); Opacity = .92; DoubleBuffered = true;
         expiry.Tick += (_, _) => { messages.RemoveAll(x => x.Expires <= Environment.TickCount64); Present(); };
     }
@@ -27,23 +30,28 @@ internal sealed class ToastHost : Form
         if (m.Msg == 0x0021) { m.Result = new IntPtr(3); return; } // MA_NOACTIVATE
         base.WndProc(ref m);
     }
-    public void Notify(Form owner, string text)
+    public void Notify(Form owner, string text, string? key = null)
     {
         if (owner.IsDisposed || !owner.Visible) return;
-        anchor = owner; Owner = owner.Owner ?? owner; messages.Insert(0, (text, Environment.TickCount64 + 2800));
+        Owner = owner.Owner ?? owner;
+        if (key != null) messages.RemoveAll(x => x.Key == key);
+        messages.Insert(0, (text, key, Environment.TickCount64 + 2800));
         if (messages.Count > 3) messages.RemoveAt(3); Present();
     }
     public void Reposition()
     {
-        if (Owner == null || !Visible) return;
-        var target = anchor is { IsDisposed: false, Visible: true } ? anchor : Owner;
-        Location = target.PointToScreen(new Point(Math.Max(8, target.ClientSize.Width - Width - 12), 6));
+        if (AnchorRegion is not { IsDisposed: false } region || messages.Count == 0) return;
+        int height = messages.Count * CardHeight + (messages.Count - 1) * Gap + Inset * 2;
+        // The same table columns own the filters/catalog and toast/cart, including resize.
+        region.MinimumSize = new Size(0, CardHeight * 3 + Gap * 2 + Inset * 2);
+        Bounds = new Rectangle(region.PointToScreen(Point.Empty), new Size(region.Width, height));
+        Invalidate();
     }
     private void Present()
     {
         expiry.Stop();
         if (messages.Count == 0) { Hide(); return; }
-        Size = new Size(360, messages.Count * 36 + 8);
+        Reposition();
         if (!Visible && Owner != null) Show(Owner);
         Reposition(); Invalidate(); // Only message changes repaint; no animation/render loop.
         expiry.Interval = (int)Math.Max(1, messages.Min(x => x.Expires) - Environment.TickCount64); expiry.Start();
@@ -51,9 +59,24 @@ internal sealed class ToastHost : Form
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
+        using var brush = new SolidBrush(Ui.Accent);
         for (int i = 0; i < messages.Count; i++)
-            TextRenderer.DrawText(e.Graphics, messages[i].Text, Font, new Rectangle(10, 4 + i * 36, Width - 20, 36), ForeColor,
-                TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        {
+            var card = new Rectangle(Inset, Inset + i * (CardHeight + Gap), Math.Max(1, Width - Inset * 2), CardHeight);
+            e.Graphics.FillRectangle(brush, card);
+            card.Inflate(-8, 0);
+            string text = messages[i].Text;
+            const string suffix = "를 장바구니에 추가했습니다";
+            if (messages[i].Key?.StartsWith("add:", StringComparison.Ordinal) == true && text.EndsWith(suffix, StringComparison.Ordinal))
+            {
+                int suffixWidth = TextRenderer.MeasureText(suffix, Font, Size.Empty, TextFormatFlags.NoPadding).Width;
+                var ending = new Rectangle(card.Right - suffixWidth, card.Top, suffixWidth, card.Height);
+                TextRenderer.DrawText(e.Graphics, suffix, Font, ending, ForeColor, TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+                card.Width = Math.Max(1, card.Width - suffixWidth); text = text[..^suffix.Length];
+            }
+            TextRenderer.DrawText(e.Graphics, text, Font, card, ForeColor,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        }
     }
     protected override void Dispose(bool disposing) { if (disposing) expiry.Dispose(); base.Dispose(disposing); }
 }

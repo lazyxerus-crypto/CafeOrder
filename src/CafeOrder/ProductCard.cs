@@ -37,17 +37,20 @@ public sealed class ProductCard : Panel
     }
     private int Unit => Math.Max(Font.Height, 19);
     public override Size GetPreferredSize(Size proposedSize)
-        => new(proposedSize.Width, Math.Max(40, proposedSize.Width - 20) + Unit * 7 + 50);
+        => new(proposedSize.Width, Math.Max(40, proposedSize.Width - 20) + Unit * 3 + 2 + PriceHeight + Math.Max(40, Unit * 2) + 32);
+    private int PriceHeight => Math.Max(Math.Max(28, Unit + 6), price.Font.Height * 2 + 2);
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e);
         if (picture == null) return;
-        int gap = Math.Max(6, Unit / 3), inset = 10, width = Math.Max(40, ClientSize.Width - inset * 2), y = inset;
+        int gap = 4, inset = 10, width = Math.Max(40, ClientSize.Width - inset * 2), y = inset;
         picture.SetBounds(inset, y, width, width); y += width + gap;
         title.SetBounds(inset, y, width, Unit * 3 + 2); y += title.Height + gap;
         int icon = Math.Max(28, Unit + 6);
-        seller.SetBounds(inset, y, icon, icon);
-        price.SetBounds(inset + icon + 6, y, width - icon - 6, Unit * 2 + 2); y += price.Height + gap;
+        int priceWidth = Math.Max(1, width - icon - 6);
+        int textHeight = Math.Min(PriceHeight, TextRenderer.MeasureText(price.Text, price.Font, new Size(priceWidth, 0), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height + 2);
+        seller.SetBounds(inset, y + PriceHeight - icon, icon, icon);
+        price.SetBounds(inset + icon + 6, y + PriceHeight - textHeight, priceWidth, textHeight); y += PriceHeight + gap;
         add.SetBounds(inset, y, width, Math.Max(40, Unit * 2));
     }
     protected override void OnPaint(PaintEventArgs e) { base.OnPaint(e); UiBorder.Draw(e.Graphics, ClientRectangle); }
@@ -83,6 +86,7 @@ internal sealed class ProductGrid : BufferedPanel
             }
             var extent = new Size(0, gap + ((ordered.Length + 2) / 3) * (height + gap));
             if (AutoScrollMinSize != extent) AutoScrollMinSize = extent;
+            AdjustFormScrollbars(true);
         }
         finally { arranging = false; }
     }
@@ -98,13 +102,20 @@ internal static class SampleImages
     {
         string key = "seller:" + supplier.Id;
         if (cache.TryGetValue(key, out var image)) return image;
-        var bitmap = new Bitmap(48, 48); using var g = Graphics.FromImage(bitmap);
-        Color color = supplier.Id switch { "mega" => Color.FromArgb(237, 183, 62), "naver" => Color.FromArgb(38, 154, 90),
-            "coupang" => Color.FromArgb(57, 133, 181), "piece" => Color.FromArgb(154, 105, 132), _ => Ui.Accent };
-        g.Clear(color); using var f = new Font("Malgun Gothic", 19, FontStyle.Bold);
-        TextRenderer.DrawText(g, supplier.Id == "naver" ? "N" : supplier.Name[..1], f, new Rectangle(0, 0, 48, 48), Color.White,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        var bitmap = LoadSeller(Path.Combine(AppContext.BaseDirectory, "Assets", "Sellers", supplier.Id + ".png"));
         cache[key] = bitmap; return bitmap;
+    }
+    internal static Image LoadSeller(string path)
+    {
+        try { using var source = Image.FromFile(path); return (Image)source.Clone(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or OutOfMemoryException or System.Runtime.InteropServices.ExternalException)
+        {
+            // Missing/invalid assets affect this seller only; keep the fixed icon slot.
+            var placeholder = new Bitmap(32, 32); using var g = Graphics.FromImage(placeholder);
+            g.Clear(Color.FromArgb(232, 238, 230)); using var pen = new Pen(Ui.Accent, 2);
+            g.DrawRectangle(pen, 6, 11, 20, 16); g.DrawLine(pen, 5, 10, 27, 10); g.DrawRectangle(pen, 12, 18, 7, 9);
+            return placeholder;
+        }
     }
     private static Image Get(string category)
     {

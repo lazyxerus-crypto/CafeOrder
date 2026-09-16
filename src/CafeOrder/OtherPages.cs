@@ -39,11 +39,12 @@ internal static class OtherPages
         foreach (var s in data.Suppliers)
         {
             var first = Ui.Row(Ui.SellerHeading(s));
-            if (s.Manual)
-            { list.Controls.Add(Ui.Column(first, Ui.Text("로그인과 주문은 판매처에서 직접 진행합니다."))); continue; }
-            var id = new TextBox { Name = $"LoginId_{s.Id}", Width = 160, PlaceholderText = "아이디", MaxLength = 100, Margin = new Padding(4, 5, 4, 5) };
-            var password = new TextBox { Name = $"LoginPassword_{s.Id}", Width = 160, UseSystemPasswordChar = true, MaxLength = 100, Margin = new Padding(4, 5, 4, 5) };
+            var id = new AsciiLoginTextBox { Name = $"LoginId_{s.Id}", PlaceholderText = "아이디" };
+            var password = new AsciiLoginTextBox { Name = $"LoginPassword_{s.Id}", UseSystemPasswordChar = true };
+            var caps = Ui.Text("⚠ Caps Lock 켜짐"); caps.Name = $"CapsLock_{s.Id}"; caps.ForeColor = Ui.Danger; caps.Visible = false;
+            password.CapsLockChanged += active => caps.Visible = active;
             first.Controls.Add(Ui.Row(Ui.Text("아이디"), id)); first.Controls.Add(Ui.Row(Ui.Text("비밀번호"), password));
+            first.Controls.Add(caps);
             if (s.SupportsNaverLogin)
             {
                 var linked = new CheckBox { Name = $"NaverLogin_{s.Id}", Text = "네이버 연동 로그인", AutoSize = true, Margin = new Padding(8) };
@@ -51,9 +52,15 @@ internal static class OtherPages
             }
             string state = s.Id switch { "mega" => "로그인 완료", "piece" => "로그인 실패", _ => "확인 전" };
             var status = Ui.Text("로그인 상태: " + state); status.ForeColor = state == "로그인 완료" ? Ui.Accent : state == "로그인 실패" ? Ui.Danger : Ui.Ink;
-            var threshold = new DigitsTextBox { Name = $"Shipping_{s.Id}", Text = data.Shipping[s.Id].ToString("0"), Width = 120 };
-            threshold.TextChanged += (_, _) => { if (decimal.TryParse(threshold.Text, out var value)) { data.Shipping[s.Id] = value; data.Notify(); } };
-            list.Controls.Add(Ui.Column(first, Ui.Row(status, Ui.Text("    무료배송 기준"), threshold, Ui.Text("원"))));
+            var login = Ui.Button(state == "로그인 완료" ? "다시 로그인" : "로그인", () => data.Toast("로그인 연결은 준비 중입니다"), name: $"Login_{s.Id}");
+            var second = Ui.Row(status, login);
+            if (!s.Manual)
+            {
+                var threshold = new DigitsTextBox { Name = $"Shipping_{s.Id}", Text = data.Shipping[s.Id].ToString("0"), Width = 120 };
+                threshold.TextChanged += (_, _) => { if (decimal.TryParse(threshold.Text, out var value)) { data.Shipping[s.Id] = value; data.Notify(); } };
+                second.Controls.AddRange([Ui.Text("    무료배송 기준"), threshold, Ui.Text("원")]);
+            }
+            list.Controls.Add(Ui.Column(first, second));
         }
         list.ResumeLayout(true); return list;
     }

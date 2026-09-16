@@ -8,11 +8,12 @@ internal sealed class CartProductRow : BufferedPanel
     private readonly Button? minus, plus, order;
     private readonly Button remove;
     private readonly SampleData data;
+    private readonly bool compact;
     public CartLine Line { get; }
     public CartProductRow(SampleData data, CartLine line, bool inOrder = false)
     {
         SuspendLayout();
-        this.data = data;
+        this.data = data; compact = inOrder;
         Line = line; Name = $"CartRow_{line.Product.Id}"; BackColor = Color.White;
         image = SampleImages.Picture(line.Product.Category, $"CartImage_{line.Product.Id}");
         title = Ui.CopyText(line.Product.Name, $"CartName_{line.Product.Id}");
@@ -45,14 +46,30 @@ internal sealed class CartProductRow : BufferedPanel
         remove.Enabled = editable; if (minus != null) minus.Enabled = editable; if (plus != null) plus.Enabled = editable;
         if (order != null) order.Enabled = editable;
     }
-    public override Size GetPreferredSize(Size proposedSize) => new(proposedSize.Width, Math.Max(19, Font.Height) * 5 + 42);
+    public void Highlight(bool active)
+    { BackColor = title.BackColor = price.BackColor = active ? Color.FromArgb(221, 238, 225) : Color.White; }
+    private int TitleHeight(int width)
+    {
+        int unit = Math.Max(19, Font.Height);
+        if (!compact) return unit * 3 + 2;
+        int textWidth = Math.Max(40, width - Math.Max(58, unit * 3) - 8 - 34);
+        return TextRenderer.MeasureText(title.Text, title.Font, new Size(textWidth, 0),
+            TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height + 2;
+    }
+    public override Size GetPreferredSize(Size proposedSize)
+    {
+        int unit = Math.Max(19, Font.Height), contentBottom = TitleHeight(proposedSize.Width) + unit + 7;
+        if (order != null) contentBottom += 4 + Ui.ActionHeight(this);
+        else if (minus != null) contentBottom += 4 + Math.Max(36, unit + 14);
+        return new(proposedSize.Width, Math.Max(contentBottom, 4 + Math.Max(58, unit * 3)) + 4);
+    }
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e); if (image == null) return;
         int unit = Math.Max(19, Font.Height), thumb = Math.Max(58, unit * 3), x = thumb + 8, width = Math.Max(70, Width - x);
         image.SetBounds(0, 4, thumb, thumb);
         remove.SetBounds(Width - 30, 2, 30, 30);
-        title.SetBounds(x, 2, Math.Max(40, width - 34), unit * 3 + 2);
+        title.SetBounds(x, 2, Math.Max(40, width - 34), TitleHeight(Width));
         price.SetBounds(x, title.Bottom + 2, width, unit + 3);
         int y = price.Bottom + 4, buttonSize = Math.Max(36, unit + 14);
         if (order != null) order.SetBounds(x, y, width, Ui.ActionHeight(this));
@@ -74,6 +91,7 @@ internal sealed class SupplierCartCard : SoftPanel
     private readonly Button order;
     private readonly Dictionary<int, CartProductRow> rows = [];
     private CartLine[] lines = [];
+    internal CartProductRow Row(int id) => rows[id];
     public SupplierCartCard(SampleData data, Supplier supplier, Action<CartLine[]> open)
     {
         this.data = data; this.supplier = supplier; this.open = open;
@@ -105,7 +123,7 @@ internal sealed class SupplierCartCard : SoftPanel
             order.BackColor = shortage > 0 ? Ui.Danger : Ui.Accent; order.ForeColor = Color.White;
             order.Enabled = shortage == 0;
         }
-        if (structural) ResumeLayout(true);
+        if (structural) { ResumeLayout(true); PerformLayout(); }
     }
     protected override void OnLayout(LayoutEventArgs e)
     {

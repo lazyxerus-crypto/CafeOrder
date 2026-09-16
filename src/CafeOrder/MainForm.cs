@@ -7,7 +7,11 @@ public partial class MainForm : Form
     public MainForm()
     {
         InitializeComponent();
-        tabs.TabPages[0].Controls.Add(new ProductsView(sample));
+        var products = new ProductsView(sample);
+        tabs.TabPages[0].Controls.Add(products);
+        toast.AnchorRegion = products.ToastRegion;
+        products.ToastRegion.SizeChanged += (_, _) => toast.Reposition();
+        products.ToastRegion.LocationChanged += (_, _) => toast.Reposition();
         tabs.TabPages[1].Controls.Add(OtherPages.History(sample));
         tabs.TabPages[2].Controls.Add(OtherPages.Suppliers(sample));
         tabs.TabPages[3].Controls.Add(OtherPages.AddProduct(sample));
@@ -16,10 +20,10 @@ public partial class MainForm : Form
         sample.ToastRequested += ShowToast;
         LocationChanged += (_, _) => toast.Reposition(); SizeChanged += (_, _) => toast.Reposition();
     }
-    private void ShowToast(string message)
+    private void ShowToast(string message, string? key)
     {
         var owner = Application.OpenForms.OfType<OrderForm>().LastOrDefault(f => f.Visible) as Form ?? this;
-        toast.Notify(owner, message);
+        toast.Notify(owner, message, key);
     }
     protected override void OnFormClosed(FormClosedEventArgs e)
     { sample.ToastRequested -= ShowToast; toast.Dispose(); base.OnFormClosed(e); }
