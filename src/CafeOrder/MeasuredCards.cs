@@ -66,13 +66,14 @@ internal sealed class HistoryItemsTable : BufferedPanel
         var row = values.Select((value, index) =>
         {
             var label = Ui.Role(Ui.Text(value, header), !header && index == 0 ? TypographyKey.HistoryProductName : TypographyKey.HistoryInfo);
+            if (label is EllipsisLabel fullText) { fullText.SingleLine = index != 0; fullText.AutoEllipsis = index != 0; }
             label.Name = $"HistoryCell_{rows.Count}_{index}"; label.AutoSize = false; label.Dock = DockStyle.None; label.Padding = new Padding(4, 2, 4, 2);
             label.FontChanged += (_, _) => { heights.Clear(); PerformLayout(); Parent?.PerformLayout(); };
             return label;
         }).ToArray(); rows.Add(row); heights.Clear(); Controls.AddRange(row);
     }
-    private int RowHeight(Label[] row, int width) => row.Select((label, index) => TextRenderer.MeasureText(label.Text, label.Font,
-        new Size(Math.Max(20, (int)(width * portions[index]) - 8), 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height + 8).Max();
+    private int RowHeight(Label[] row, int width) => row.Select((label, index) => index == 0 ? TextRenderer.MeasureText(label.Text, label.Font,
+        new Size(Math.Max(20, (int)(width * portions[index]) - 8), 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height + 8 : label.Font.Height + 8).Max();
     private int[] Heights(int width)
     { if (!heights.TryGetValue(width, out var value)) { if (heights.Count > 64) heights.Clear(); heights[width] = value = rows.Select(row => RowHeight(row, width)).ToArray(); } return value; }
     public override Size GetPreferredSize(Size proposedSize) => new(proposedSize.Width, Heights(proposedSize.Width).Sum());

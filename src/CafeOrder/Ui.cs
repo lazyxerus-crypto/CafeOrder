@@ -17,8 +17,9 @@ internal static class Ui
         ShortcutsEnabled = true, TabStop = true
     }, TypographyKey.General);
 
-    public static Label Text(string text, bool heading = false) => Role(new Label()
+    public static Label Text(string text, bool heading = false) => Role(new EllipsisLabel()
     {
+        SingleLine = !text.Contains('\n'),
         Text = text, AutoSize = true, ForeColor = Ink, Margin = new Padding(4, 5, 4, 5),
         Font = new Font("Malgun Gothic", heading ? 13 : 11.5f, heading ? FontStyle.Bold : FontStyle.Regular),
         Dock = DockStyle.Top, UseMnemonic = false
@@ -37,7 +38,7 @@ internal static class Ui
     }
     public static ComboBox Combo(IEnumerable<string> items, string name)
     {
-        var c = new ComboBox { Name = name, DropDownStyle = ComboBoxStyle.DropDownList,
+        var c = new EllipsisComboBox { Name = name, DropDownStyle = ComboBoxStyle.DropDownList,
             Dock = DockStyle.Fill, Margin = new Padding(4, 6, 4, 6), IntegralHeight = true };
         c.Items.AddRange(items.Cast<object>().ToArray()); c.SelectedIndex = 0; return Role(c, TypographyKey.General);
     }
@@ -118,11 +119,10 @@ internal static class Ui
     {
         var row = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2 };
         row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 38)); row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        row.Controls.Add(new PictureBox { Image = SampleImages.Seller(supplier), SizeMode = PictureBoxSizeMode.Zoom, Width = 30, Height = 30, Margin = new Padding(3) }, 0, 0);
+        row.Controls.Add(new SellerIcon(supplier), 0, 0);
         row.Controls.Add(Text(supplier.Name, true), 1, 0); return row;
     }
-    public static int ActionHeight(Control c, int? width = null) => Math.Max(Math.Max(40, c.Font.Height * 2), TextRenderer.MeasureText(c.Text, c.Font,
-        new Size(Math.Max(24, (width ?? c.Width) - c.Padding.Horizontal - 4), 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height + c.Padding.Vertical + 4);
+    public static int ActionHeight(Control c, int? width = null) => Math.Max(40, c.Font.Height + c.Padding.Vertical + 8);
 }
 
 internal static class NativeUi
@@ -197,12 +197,32 @@ internal sealed class ScrollCopyTextBox : TextBox
 // Disabled shortage actions retain an explicit red/white, readable treatment.
 internal sealed class ActionButton : Button
 {
+    private readonly ToolTip tip = new() { ShowAlways = true };
+    private Control? hintParent;
+    private bool disabledHint;
+    protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); tip?.SetToolTip(this, Text); }
+    protected override void OnParentChanged(EventArgs e)
+    {
+        if (hintParent != null) { hintParent.MouseMove -= ParentMove; hintParent.MouseLeave -= ParentLeave; }
+        base.OnParentChanged(e); hintParent = Parent;
+        if (hintParent != null) { hintParent.MouseMove += ParentMove; hintParent.MouseLeave += ParentLeave; }
+    }
+    private void ParentMove(object? sender, MouseEventArgs e)
+    {
+        if (!Enabled && Visible && Bounds.Contains(e.Location))
+        { if (!disabledHint) { disabledHint = true; tip.Show(Text, hintParent!, e.X + 12, e.Y + 22, 5000); } }
+        else ParentLeave(sender, EventArgs.Empty);
+    }
+    private void ParentLeave(object? sender, EventArgs e) { if (disabledHint && hintParent != null) tip.Hide(hintParent); disabledHint = false; }
+    protected override void Dispose(bool disposing)
+    { if (disposing) { if (hintParent != null) { hintParent.MouseMove -= ParentMove; hintParent.MouseLeave -= ParentLeave; } tip.Dispose(); } base.Dispose(disposing); }
     protected override void OnPaint(PaintEventArgs e)
     {
-        if (Enabled) { base.OnPaint(e); return; }
+
         e.Graphics.Clear(BackColor);
         ControlPaint.DrawBorder(e.Graphics, ClientRectangle, FlatAppearance.BorderColor, ButtonBorderStyle.Solid);
         TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ForeColor,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -4, -4));
     }
 }

@@ -39,7 +39,7 @@ internal static partial class Program
                 main.Size = size; Pump(); var filters = Find<TableLayoutPanel>(main, "Filters"); var left = Find<Panel>(main, "ProductRegion"); var right = Find<Panel>(main, "CartRegion");
                 Require(filters.Left == left.Left && filters.Right == left.Right && filters.Right < right.Left, "Toolbar aligns with product column on resize");
                 foreach (var name in new[] { "CategoryFilter", "SupplierFilter", "Search", "RefreshProducts", "AddProduct", "ExportProducts", "ImportProducts", "ViewColumns3", "ViewColumns4", "ViewColumns5" })
-                { var c = Find<Control>(main, name); Require(filters.RectangleToScreen(filters.ClientRectangle).Contains(c.RectangleToScreen(c.ClientRectangle)), "Toolbar child within left region: " + name); }
+                { var c = Find<Control>(main, name); var toolbar = name is "Search" or "CategoryFilter" or "SupplierFilter" ? filters : Find<TableLayoutPanel>(main, "Management"); Require(toolbar.RectangleToScreen(toolbar.ClientRectangle).Contains(c.RectangleToScreen(c.ClientRectangle)), "Toolbar child within left region: " + name); }
             }
             main.Size = new Size(1280, 720); search.Clear();
         }
@@ -49,7 +49,7 @@ internal static partial class Program
         var soldOrder = grid.Items.ToArray(); Mouse(sold, MouseButtons.Left, sold.ImageBounds.Location + new Size(5, 5)); Pump();
         Require(!sold.Product.Available && soldOrder.SequenceEqual(grid.Items), "Still sold out without sorting");
         var restock = Find<ProductCard>(grid, "Product_12"); search.Text = restock.Product!.Name;
-        Mouse(restock, MouseButtons.Left, new Point(15, 15)); Pump(); Require(restock.Product.Available, "Sample recheck returns stocked card"); Capture(restock, "17-restocked");
+        Mouse(restock, MouseButtons.Left, new Point(45, 40)); Pump(); Require(restock.Product.Available, "Sample recheck returns stocked card"); Capture(restock, "17-restocked");
         search.Clear();
         var sample = Find<ProductCard>(grid, "Product_7"); var cardOrder = grid.Items.ToArray(); grid.AutoScrollPosition = new Point(0, 80); var productScroll = grid.AutoScrollPosition;
         data.SetActive(sample.Product!, false); Require(sample.Visible && cardOrder.SequenceEqual(grid.Items) && grid.AutoScrollPosition == productScroll, "Soft delete stays in place until explicit refresh");
@@ -65,16 +65,16 @@ internal static partial class Program
         search.Text = "카페 블렌드 원두"; sample.Focus();
         var hint = (ToolTip)typeof(ProductCard).GetField("hint", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(sample)!;
         int pops = 0; hint.Popup += (_, _) => pops++;
-        foreach (var point in new[] { new Point(15, 15), sample.ImageBounds.Location + new Size(5, 5), sample.NameBounds.Location + new Size(5, 5), sample.PriceBounds.Location + new Size(5, 5) })
+        foreach (var point in new[] { new Point(45, 40), sample.ImageBounds.Location + new Size(5, 5), sample.NameBounds.Location + new Size(5, 5), sample.PriceBounds.Location + new Size(5, 5) })
         {
             Mouse(sample, MouseButtons.Left, point);
             int previousPops = pops; await Task.Delay(650);
             Require(pops > previousPops, "Native tooltip actually opens after click");
             Require(sample.TooltipAt(point) == (sample.PriceBounds.Contains(point) ? sample.Product.PriceText : sample.Product.Name), "Full tooltip text survives click/focus on each surface");
         }
-        Mouse(sample, MouseButtons.Right, new Point(15, 15));
+        Mouse(sample, MouseButtons.Right, new Point(45, 40));
         var popup = (ContextMenuStrip?)typeof(ProductCard).GetField("menu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(sample);
-        popup!.Close(); Require(sample.TooltipAt(new Point(15, 15)) == sample.Product.Name, "Tooltip remains available after menu closes");
+        popup!.Close(); Require(sample.TooltipAt(new Point(45, 40)) == sample.Product.Name, "Tooltip remains available after menu closes");
         int closedPops = pops; await Task.Delay(650); Require(pops > closedPops, "Native tooltip opens after context menu closes");
         search.Clear();
         using (var order = new OrderForm(data, data.Cart.ToArray()))

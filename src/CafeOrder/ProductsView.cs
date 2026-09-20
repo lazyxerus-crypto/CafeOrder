@@ -25,16 +25,26 @@ public sealed class ProductsView : UserControl
         var root = new TableLayoutPanel { Name = "ProductColumns", Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 2 };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 66)); root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
-        var filters = new FilterTable { Name = "Filters", Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 4, RowCount = 5 };
+        var filters = new TableLayoutPanel { Name = "Filters", Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 4, RowCount = 2, Padding = new Padding(6) };
         foreach (float percent in new[] { 50f, 50f })
         { filters.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, percent)); }
         Control[] filterControls = [Ui.Text("카테고리"), category, Ui.Text("판매처"), supplier];
         for (int i = 0; i < filterControls.Length; i++) filters.Controls.Add(filterControls[i], i, 0);
-        for (int i = 0; i < 5; i++) filters.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (int i = 0; i < 2; i++) filters.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var feedback = Ui.Text(""); feedback.Name = "TransferStatus"; feedback.Visible = false;
         void Transfer(string action) { feedback.Text = $"xlsx {action}는 저장소 연결 후 사용할 수 있습니다."; feedback.Visible = true; }
         var actions = Ui.Row(Ui.Button("새로고침", () => FilterProducts(), name: "RefreshProducts"), Ui.Button("상품 추가", AddDraft, name: "AddProduct"), Ui.Button("내보내기", () => Transfer("내보내기"), name: "ExportProducts"), Ui.Button("가져오기", () => Transfer("가져오기"), name: "ImportProducts"));
-        filters.Controls.Add(actions, 0, 1); filters.SetColumnSpan(actions, 4);
+        var management = new TableLayoutPanel { Name = "Management", Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 3, Padding = new Padding(6) };
+        management.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (int row = 0; row < 3; row++) management.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var buttonRow = new TableLayoutPanel { Name = "ManagementButtons", Dock = DockStyle.Top, AutoSize = true, ColumnCount = 4, Margin = Padding.Empty };
+        foreach (Control button in actions.Controls.Cast<Control>().ToArray())
+        {
+            buttonRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            button.AutoSize = false; button.Dock = DockStyle.Fill; button.MinimumSize = Size.Empty; button.Padding = new Padding(2);
+            button.Height = Ui.ActionHeight(button); buttonRow.Controls.Add(button);
+        }
+        actions.Dispose(); management.Controls.Add(buttonRow, 0, 0);
         var views = Ui.Row();
         foreach (int columns in new[] { 3, 4, 5 })
         {
@@ -49,9 +59,27 @@ public sealed class ProductsView : UserControl
             };
             views.Controls.Add(button);
         }
-        filters.Controls.Add(views, 0, 2); filters.SetColumnSpan(views, 4);
-        filters.Controls.Add(Ui.Text("검색"), 0, 3); filters.Controls.Add(Ui.Role(search, TypographyKey.General), 1, 3); filters.SetColumnSpan(search, 3);
-        filters.Controls.Add(feedback, 0, 4); filters.SetColumnSpan(feedback, 4);
+        views.WrapContents = false; management.Controls.Add(views, 0, 1);
+        filters.Controls.Add(Ui.Text("검색"), 0, 1); filters.Controls.Add(Ui.Role(search, TypographyKey.General), 1, 1); filters.SetColumnSpan(search, 3);
+        management.Controls.Add(feedback, 0, 2);
+        bool fitting = false;
+        void FitRows()
+        {
+            if (fitting) return; fitting = true;
+            try
+            {
+                int first = Math.Max(buttonRow.GetPreferredSize(new Size(management.Width - 12, 0)).Height, category.PreferredSize.Height + category.Margin.Vertical);
+                first = Math.Max(first, supplier.PreferredSize.Height + supplier.Margin.Vertical);
+                int second = Math.Max(views.GetPreferredSize(Size.Empty).Height, search.PreferredSize.Height + search.Margin.Vertical);
+                filters.RowStyles[0] = new RowStyle(SizeType.Absolute, first); filters.RowStyles[1] = new RowStyle(SizeType.Absolute, second);
+                management.RowStyles[0] = new RowStyle(SizeType.Absolute, first); management.RowStyles[1] = new RowStyle(SizeType.Absolute, second);
+                filters.PerformLayout(); management.PerformLayout();
+            }
+            finally { fitting = false; }
+        }
+        foreach (Control button in buttonRow.Controls) button.FontChanged += (_, _) => FitRows();
+        category.FontChanged += (_, _) => FitRows(); supplier.FontChanged += (_, _) => FitRows(); search.FontChanged += (_, _) => FitRows();
+        management.SizeChanged += (_, _) => FitRows(); FitRows();
         var left = new SoftPanel { Name = "ProductRegion", Dock = DockStyle.Fill, BackColor = Color.FromArgb(237, 243, 239) };
         products.BackColor = left.BackColor;
         left.Controls.Add(products); left.Controls.Add(count);
@@ -61,7 +89,7 @@ public sealed class ProductsView : UserControl
         orderAll.Dock = DockStyle.Bottom; orderAll.AutoSize = false; orderAll.Height = Math.Max(50, Ui.ActionHeight(orderAll, 350));
         right.SizeChanged += (_, _) => orderAll.Height = Math.Max(50, Ui.ActionHeight(orderAll, right.ClientSize.Width - right.Padding.Horizontal));
         right.Controls.Add(cart); right.Controls.Add(Ui.SectionHeading("장바구니")); right.Controls.Add(orderAll);
-        root.Controls.Add(filters, 0, 0);
+        root.Controls.Add(filters, 0, 0); root.Controls.Add(management, 1, 0);
         root.Controls.Add(left, 0, 1); root.Controls.Add(right, 1, 1); Controls.Add(root);
         products.SuspendLayout();
         foreach (var p in data.Products.Where(p => p.IsActive))

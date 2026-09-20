@@ -26,18 +26,16 @@ public sealed class ProductCard : Panel
     internal Rectangle PriceBounds { get; private set; }
     private Font Role(TypographyKey key, FontStyle style = FontStyle.Regular) => Ui.Fonts!.Font(key, style);
     private int InnerWidth(int width) => Math.Max(24, width - 20);
-    private static readonly Dictionary<(int Width, float Size), int> headerHeights = [];
-    private int HeaderHeight(int width)
-    {
-        var font = Role(TypographyKey.Category, FontStyle.Bold); var key = (width, font.Size);
-        if (!headerHeights.TryGetValue(key, out int height))
-        { if (headerHeights.Count > 128) headerHeights.Clear(); headerHeights[key] = height = Math.Max(30, SampleData.Categories.Skip(1).Max(c => TextRenderer.MeasureText(c, font, new Size(Math.Max(30, InnerWidth(width) - 38), 0), TextFormatFlags.WordBreak).Height)); }
-        return height;
-    }
-    private int NameHeight => Role(TypographyKey.ProductName, FontStyle.Bold).Height * 3 + 4;
+    private int HeaderHeight(int width) => Math.Max(30, Role(TypographyKey.Category, FontStyle.Bold).Height + 2);
+    private int NameHeight => TextRenderer.MeasureText("가\n가\n가", Role(TypographyKey.ProductName, FontStyle.Bold),
+        new Size(10000, 0), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height + 4;
     private int PriceHeight(int width) => Role(TypographyKey.ProductPrice).Height + 2;
     internal string PriceDisplayText => Product?.PriceText ?? "";
-    internal string TooltipAt(Point location) => Product == null ? "상품 링크 입력 후 Enter" : PriceBounds.Contains(location) ? Product.PriceText : Product.Name;
+    internal Rectangle SellerBounds => new(10, 10, 28, 28);
+    internal Rectangle CategoryBounds => new(48, 10, Math.Max(24, Width - 58), HeaderHeight(Width));
+    internal string TooltipAt(Point location) => Product == null ? (CategoryBounds.Contains(location) ? draftCategory : "상품 링크 입력 후 Enter") :
+        SellerBounds.Contains(location) ? SellerLinks.Hint(Product.Supplier, SellerLinks.ProductHome(Product)) :
+        CategoryBounds.Contains(location) ? Product.Category : PriceBounds.Contains(location) ? Product.PriceText : Product.Name;
     internal static System.Diagnostics.ProcessStartInfo LinkStartInfo(string url) => new(url) { UseShellExecute = true };
     private void ArmHint(Point point)
     {
@@ -52,7 +50,7 @@ public sealed class ProductCard : Panel
     {
         this.data = data; Product = product; this.draftCategory = draftCategory;
         Name = product == null ? "Draft_" + Guid.NewGuid().ToString("N") : $"Product_{product.Id}";
-        DoubleBuffered = true; BackColor = Color.White; AllowDrop = true; Margin = Padding.Empty; TabStop = true;
+        DoubleBuffered = true; ResizeRedraw = true; BackColor = Color.White; AllowDrop = true; Margin = Padding.Empty; TabStop = true;
         undo = Ui.Button("되돌리기", () => Run(() => data.SetActive(Product!, true)), name: "UndoProduct");
         undo.AutoSize = false; undo.Visible = false; Controls.Add(undo);
         if (IsDraft)
@@ -96,6 +94,7 @@ public sealed class ProductCard : Panel
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e); if (undo == null || Ui.Fonts == null) return;
+        Invalidate(); // Owner-painted content must redraw after geometry/font changes, including shrinking.
         int inner = InnerWidth(Width), y = 10 + HeaderHeight(Width) + 6;
         ImageBounds = new Rectangle(10, y, inner, inner); y += inner + 6;
         NameBounds = new Rectangle(10, y, inner, NameHeight); y += NameHeight + 3;
@@ -111,9 +110,9 @@ public sealed class ProductCard : Panel
         if (pressed || flashing) { using var flash = new SolidBrush(Color.FromArgb(230, 241, 232)); g.FillRectangle(flash, ClientRectangle); }
         if (Product is { Available: false, IsActive: true }) { using var tint = new SolidBrush(Color.FromArgb(255, 230, 230)); g.FillRectangle(tint, ClientRectangle); }
         int header = HeaderHeight(Width);
-        if (Product != null) g.DrawImage(SampleImages.Seller(Product.Supplier), new Rectangle(10, 10, 28, 28));
-        TextRenderer.DrawText(g, Product?.Category ?? draftCategory, Role(TypographyKey.Category, FontStyle.Bold), new Rectangle(48, 10, Math.Max(24, Width - 58), header), Ui.Ink,
-            TextFormatFlags.Right | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+        if (Product != null) g.DrawImage(SampleImages.Seller(Product.Supplier), SellerBounds);
+        TextRenderer.DrawText(g, Product?.Category ?? draftCategory, Role(TypographyKey.Category, FontStyle.Bold), CategoryBounds, Ui.Ink,
+            TextFormatFlags.Right | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         if (Product == null)
         {
             using var brush = new SolidBrush(Color.FromArgb(232, 238, 230)); g.FillRectangle(brush, ImageBounds);
@@ -152,12 +151,14 @@ public sealed class ProductCard : Panel
     protected override void OnMouseDown(MouseEventArgs e)
     { base.OnMouseDown(e); hover.Stop(); hint.Hide(this); pressed = e.Button == MouseButtons.Left && Product is { IsActive: true }; dragging = false; pressedAt = e.Location; Invalidate(); }
     protected override void OnMouseMove(MouseEventArgs e)
-    { base.OnMouseMove(e); if (e.Button == MouseButtons.None) ArmHint(e.Location); if (pressed && (Math.Abs(e.X - pressedAt.X) > SystemInformation.DragSize.Width || Math.Abs(e.Y - pressedAt.Y) > SystemInformation.DragSize.Height)) dragging = true; }
+    { base.OnMouseMove(e); if (e.Button == MouseButtons.None) { ArmHint(e.Location); Cursor = Product != null && SellerBounds.Contains(e.Location) ? (SellerLinks.ProductHome(Product) == null ? Cursors.Default : Cursors.Hand) : Product is { IsActive: true, Available: true } ? Cursors.Hand : Cursors.Default; } if (pressed && (Math.Abs(e.X - pressedAt.X) > SystemInformation.DragSize.Width || Math.Abs(e.Y - pressedAt.Y) > SystemInformation.DragSize.Height)) dragging = true; }
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e); bool activate = pressed && !dragging && ClientRectangle.Contains(e.Location); pressed = false;
         if (e.Button == MouseButtons.Right && (IsDraft || Product is { IsActive: true })) ShowMenu(e.Location);
-        else if (e.Button == MouseButtons.Left && activate && Product is { IsActive: true } product)
+        else if (e.Button == MouseButtons.Left && Product != null && SellerBounds.Contains(pressedAt) && SellerBounds.Contains(e.Location) && !dragging)
+            SellerLinks.Open(SellerLinks.ProductHome(Product));
+        else if (e.Button == MouseButtons.Left && !SellerBounds.Contains(pressedAt) && activate && Product is { IsActive: true } product)
         {
             if (!product.Available && !product.Supplier.Manual && !checking)
             {
@@ -176,8 +177,13 @@ public sealed class ProductCard : Panel
         context.Items.Add("상품 삭제", null, (_, _) => { if (product == null) DeleteDraft?.Invoke(); else Run(() => data.SetActive(product, false)); });
         var imageDelete = context.Items.Add("이미지 삭제", null, (_, _) => Run(RemoveManual)); imageDelete.Enabled = manual != null;
         var categories = new ToolStripMenuItem("카테고리 변경");
-        foreach (var category in SampleData.Categories.Skip(1)) categories.DropDownItems.Add(category, null, (_, _) =>
-        { if (product == null) { draftCategory = category; Invalidate(); } else Run(() => data.SetCategory(product, category)); });
+        foreach (var category in SampleData.Categories.Skip(1))
+        {
+            var item = new ToolStripMenuItem(category) { Checked = category == (product?.Category ?? draftCategory) };
+            item.Click += (_, _) => { if (product == null) { draftCategory = category; Invalidate(); } else Run(() => data.SetCategory(product, category)); };
+            categories.DropDownItems.Add(item);
+        }
+        categories.DropDownOpening += (_, _) => { foreach (ToolStripMenuItem item in categories.DropDownItems) item.Checked = item.Text == (Product?.Category ?? draftCategory); };
         context.Items.Add(categories);
         var link = context.Items.Add("상품 링크", null, (_, _) =>
         {

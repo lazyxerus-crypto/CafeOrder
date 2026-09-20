@@ -21,6 +21,7 @@ internal static partial class Program
         try
         {
             if (args.Contains("--repro-six")) { Run(ReproSix); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
+            if (args.Contains("--repro-seven")) { Run(ReproSeven); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             Run(Check);
             Run(CheckRestart);
             var store = new LocalState(statePath); Require(store.Preferences.Window?.Maximized == true, "Closing a maximized window saves its state"); store.Preferences.Window = new(-30000, -30000, 10, 10, true); store.SavePreferences();
@@ -28,7 +29,7 @@ internal static partial class Program
         }
         catch (Exception ex) { failure = ex; }
         finally { if (clipboard != null) Clipboard.SetDataObject(clipboard, true); else Clipboard.Clear(); }
-        string result = failure?.ToString() ?? "PASS: revision 6 toolbar/grid buttons, single-line prices, cart visibility/order/reuse, unified draft/product menu, local refresh/in-place registration, sold-out/tooltip, stable scroll widths, X borders, typography reset/persistence, x64.";
+        string result = failure?.ToString() ?? "PASS: revision 7 column repaint, two-column toolbar, category check, ellipsis/original tooltips, seller homepage routing; revision 6 regressions: toolbar/grid buttons, single-line prices, cart visibility/order/reuse, unified draft/product menu, local refresh/in-place registration, sold-out/tooltip, stable scroll widths, X borders, typography reset/persistence, x64.";
         File.WriteAllText(Path.Combine(output, "result.txt"), result); File.WriteAllLines(Path.Combine(output, "performance.txt"), results);
         Console.WriteLine(result); return failure == null ? 0 : 1;
     }
@@ -79,7 +80,7 @@ internal static partial class Program
         var card = Find<ProductCard>(grid, "Product_1"); search.Text = "포모나";
         Require(!All(card).OfType<TextBox>().Any() && !All(card).OfType<Button>().Any(b => b.Text.Contains("장바구니")), "No copy textboxes or add button in normal cards");
         int qty = data.Cart.Single(l => l.Product.Id == 1).Quantity;
-        foreach (var point in new[] { new Point(15, 15), new Point(card.ImageBounds.Left + 10, card.ImageBounds.Top + 10), card.NameBounds.Location + new Size(5, 5), card.PriceBounds.Location + new Size(5, 5) }) Mouse(card, MouseButtons.Left, point);
+        foreach (var point in new[] { new Point(45, 40), new Point(card.ImageBounds.Left + 10, card.ImageBounds.Top + 10), card.NameBounds.Location + new Size(5, 5), card.PriceBounds.Location + new Size(5, 5) }) Mouse(card, MouseButtons.Left, point);
         Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty + 4, "Exactly one increment per click across every surface");
         Mouse(card, MouseButtons.Left, card.ImageBounds.Location + new Size(5, 5), true);
         Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty + 4, "Image drag gesture never adds");
@@ -90,11 +91,11 @@ internal static partial class Program
             menu.Items[5].PerformClick(); Require(Clipboard.GetText() == card.Product!.Name, "Copy full name");
             menu.Items[6].PerformClick(); Require(Clipboard.GetText() == card.Product!.PriceText, "Copy price including note");
             menu.Items[7].PerformClick(); Require(Clipboard.GetText() == card.Product!.Name + Environment.NewLine + card.Product.PriceText, "Copy name newline price");
-            Mouse(card, MouseButtons.Right, new Point(15, 15));
+            Mouse(card, MouseButtons.Right, new Point(45, 40));
             Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty + 4, "Right click never adds");
             foreach (var popup in Application.OpenForms.Cast<Form>().Where(f => f != main).ToArray()) Require(popup.Name != "ToastHost", "No floating feedback");
             menu.Items[0].PerformClick(); Require(!card.Product!.IsActive && grid.Controls.Contains(card) && card.Visible, "Soft deletion keeps visible card");
-            Mouse(card, MouseButtons.Left, new Point(15, 15)); Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty + 4, "Deleted product does not add");
+            Mouse(card, MouseButtons.Left, new Point(45, 40)); Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty + 4, "Deleted product does not add");
             Capture(card, "02-deleted-card"); Find<Button>(card, "UndoProduct").PerformClick(); Require(card.Product.IsActive, "Immediate undo");
         }
         // Close any context popup before driving more controls.
@@ -106,10 +107,11 @@ internal static partial class Program
         var lineOrder = data.Cart.ToArray(); var sellerOrder = cart.Controls.Cast<Control>().ToArray(); cart.AutoScrollPosition = new Point(0, 80); var scroll = cart.AutoScrollPosition;
         data.ChangeQuantity(data.Cart.Single(l => l.Product.Id == 1), 1); data.ChangeQuantity(data.Cart.Single(l => l.Product.Id == 1), -1);
         Require(lineOrder.SequenceEqual(data.Cart) && sellerOrder.SequenceEqual(cart.Controls.Cast<Control>()) && scroll == cart.AutoScrollPosition, "Quantity retains order and scroll");
-        cart.AutoScrollPosition = new Point(0, 700); Mouse(Find<ProductCard>(grid, "Product_7"), MouseButtons.Left, new Point(15, 15));
+        cart.AutoScrollPosition = new Point(0, 700); Mouse(Find<ProductCard>(grid, "Product_7"), MouseButtons.Left, new Point(45, 40));
         var row7 = Find<Control>(cart, "CartRow_7");
         Require(cart.Controls[0].Name == "Cart_mega" && row7.Top < Find<Control>(cart, "CartRow_1").Top && cart.RectangleToScreen(cart.ClientRectangle).Contains(row7.RectangleToScreen(row7.ClientRectangle)), "Latest seller/item first and fully visible");
         Require(row7.BackColor == Color.FromArgb(221, 238, 225) && cart.Controls[0].BackColor == Color.White, "Only added row highlights");
+        await CheckSeven(main);
         await CheckSix(main);
         CheckImages(main, data, grid, card);
         CheckDrafts(main, data, grid);
@@ -172,11 +174,13 @@ internal static partial class Program
         search.Text = "no-match"; supplier.SelectedItem = "쿠팡";
         Require(drafts.All(d => d.Visible) && data.Products.Count == count && data.ExportRows().Length == export, "Drafts excluded from normal count/search/seller/export/sorting");
         var draft = drafts[0]; var url = Find<TextBox>(draft, "DraftUrl"); url.Text = "https://unsupported.invalid/item/1"; draft.RegisterDraft(); Require(draft.IsDraft && url.Text.Contains("unsupported"), "Failed registration retains editable draft");
+        var previousSize = main.Size; main.Size = new Size(1500, 600); Pump();
         grid.AutoScrollPosition = new Point(0, 35); Pump();
         var registrationOrder = grid.Items.ToArray(); var registrationBounds = draft.Bounds; var registrationScroll = grid.AutoScrollPosition;
         Require(registrationScroll.Y < 0, "Registration also tested with nonzero scroll");
         url.Text = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000002613"; draft.RegisterDraft();
         Require(draft.Visible && registrationOrder.SequenceEqual(grid.Items) && draft.Bounds == registrationBounds && grid.AutoScrollPosition == registrationScroll, $"URL position: visible={draft.Visible} order={registrationOrder.SequenceEqual(grid.Items)} bounds={registrationBounds} -> {draft.Bounds} scroll={registrationScroll} -> {grid.AutoScrollPosition}");
+        main.Size = previousSize;
         Require(!draft.IsDraft && draft.Product!.Category == "티백" && grid.Controls.Contains(draft) && data.Products.Count == count + 1, "Mock URL success converts same card and persists category"); registeredId = draft.Product!.Id;
         Require(data.Store.LoadProducts().Any(p => p.Id == registeredId && p.Url == draft.Product.Url), "Registered sample is saved");
         Find<Button>(main, "RefreshProducts").PerformClick(); Require(!draft.Visible && drafts[1].Visible, "Explicit refresh applies filters to registered card while retaining unfinished draft");
@@ -227,7 +231,7 @@ internal static partial class Program
         foreach (var table in All(main).OfType<HistoryItemsTable>())
         {
             foreach (var label in table.Controls.OfType<Label>())
-            { int needed = TextRenderer.MeasureText(label.Text, label.Font, new Size(Math.Max(20, label.Width - 8), 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height; Require(label.Height >= needed + 4, "History text wraps within measured row"); }
+            { int needed = TextRenderer.MeasureText(label.Text, label.Font, new Size(Math.Max(20, label.Width - 8), 0), (label is EllipsisLabel { SingleLine: true } ? TextFormatFlags.SingleLine : TextFormatFlags.WordBreak) | TextFormatFlags.NoPrefix).Height; Require(label.Height >= needed + 4, "History names fully wrap; other fields stay on one line"); }
             Require(table.Height == table.Controls.Cast<Control>().Max(c => c.Bottom), "History table height matches row sum");
         }
     }
@@ -244,7 +248,7 @@ internal static partial class Program
                 main.Size = size; main.Update();
                 var filters = Find<TableLayoutPanel>(main, "Filters");
                 foreach (var name in new[] { "AddProduct", "ExportProducts", "ImportProducts", "Search" })
-                { var control = Find<Control>(main, name); if (!filters.RectangleToScreen(filters.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle))) { Capture(main, "toolbar-failure"); throw new Exception($"Toolbar {name}: filter={filters.Bounds} control={control.Bounds} parent={control.Parent!.Bounds}"); } }
+                { var control = Find<Control>(main, name); var toolbar = name == "Search" ? filters : Find<TableLayoutPanel>(main, "Management"); if (!toolbar.RectangleToScreen(toolbar.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle))) { Capture(main, "toolbar-failure"); throw new Exception($"Toolbar {name}: filter={filters.Bounds} control={control.Bounds} parent={control.Parent!.Bounds}"); } }
                 foreach (var card in grid.Controls.OfType<ProductCard>().Where(c => c.Visible && c.Product != null))
                 {
                     var needed = TextRenderer.MeasureText(card.PriceDisplayText, fonts.Font(TypographyKey.ProductPrice), new Size(card.PriceBounds.Width, 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
