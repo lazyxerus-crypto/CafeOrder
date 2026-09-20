@@ -4,7 +4,7 @@ using System.Drawing.Imaging;
 using System.Reflection;
 using System.Runtime.InteropServices;
 
-internal static class Program
+internal static partial class Program
 {
     private static string output = "";
     private static readonly List<string> results = [];
@@ -20,6 +20,7 @@ internal static class Program
         var clipboard = Clipboard.GetDataObject();
         try
         {
+            if (args.Contains("--repro-six")) { Run(ReproSix); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             Run(Check);
             Run(CheckRestart);
             var store = new LocalState(statePath); Require(store.Preferences.Window?.Maximized == true, "Closing a maximized window saves its state"); store.Preferences.Window = new(-30000, -30000, 10, 10, true); store.SavePreferences();
@@ -27,7 +28,7 @@ internal static class Program
         }
         catch (Exception ex) { failure = ex; }
         finally { if (clipboard != null) Clipboard.SetDataObject(clipboard, true); else Clipboard.Clear(); }
-        string result = failure?.ToString() ?? "PASS: revision 5 product click/context/draft/delete persistence, WebP crop/manual image fallback, 3/4/5 columns, modeless typography/live sizing/copy/persistence, window restore, history/order layout, supplier reuse/performance, x64.";
+        string result = failure?.ToString() ?? "PASS: revision 6 toolbar/grid buttons, single-line prices, cart visibility/order/reuse, unified draft/product menu, local refresh/in-place registration, sold-out/tooltip, stable scroll widths, X borders, typography reset/persistence, x64.";
         File.WriteAllText(Path.Combine(output, "result.txt"), result); File.WriteAllLines(Path.Combine(output, "performance.txt"), results);
         Console.WriteLine(result); return failure == null ? 0 : 1;
     }
@@ -82,13 +83,13 @@ internal static class Program
         Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty + 4, "Exactly one increment per click across every surface");
         Mouse(card, MouseButtons.Left, card.ImageBounds.Location + new Size(5, 5), true);
         Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty + 4, "Image drag gesture never adds");
-        using (var menu = card.BuildMenu(false))
+        using (var menu = card.BuildMenu())
         {
-            Require(menu.Items.Cast<ToolStripItem>().Select(x => x.Text).SequenceEqual(new[] { "상품 삭제", "카테고리 변경", "", "이름 복사", "가격 복사", "이름 + 가격 복사" }), "Context menu ordering");
-            Require(((ToolStripMenuItem)menu.Items[1]).DropDownItems.Cast<ToolStripItem>().Select(x => x.Text).SequenceEqual(SampleData.Categories.Skip(1)), "Category submenu");
-            menu.Items[3].PerformClick(); Require(Clipboard.GetText() == card.Product!.Name, "Copy full name");
-            menu.Items[4].PerformClick(); Require(Clipboard.GetText() == card.Product!.PriceText, "Copy price including note");
-            menu.Items[5].PerformClick(); Require(Clipboard.GetText() == card.Product!.Name + Environment.NewLine + card.Product.PriceText, "Copy name newline price");
+            Require(menu.Items.Cast<ToolStripItem>().Select(x => x.Text).SequenceEqual(new[] { "상품 삭제", "이미지 삭제", "카테고리 변경", "상품 링크", "", "이름 복사", "가격 복사", "이름 + 가격 복사" }), "Context menu ordering");
+            Require(((ToolStripMenuItem)menu.Items[2]).DropDownItems.Cast<ToolStripItem>().Select(x => x.Text).SequenceEqual(SampleData.Categories.Skip(1)), "Category submenu");
+            menu.Items[5].PerformClick(); Require(Clipboard.GetText() == card.Product!.Name, "Copy full name");
+            menu.Items[6].PerformClick(); Require(Clipboard.GetText() == card.Product!.PriceText, "Copy price including note");
+            menu.Items[7].PerformClick(); Require(Clipboard.GetText() == card.Product!.Name + Environment.NewLine + card.Product.PriceText, "Copy name newline price");
             Mouse(card, MouseButtons.Right, new Point(15, 15));
             Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty + 4, "Right click never adds");
             foreach (var popup in Application.OpenForms.Cast<Form>().Where(f => f != main).ToArray()) Require(popup.Name != "ToastHost", "No floating feedback");
@@ -109,6 +110,7 @@ internal static class Program
         var row7 = Find<Control>(cart, "CartRow_7");
         Require(cart.Controls[0].Name == "Cart_mega" && row7.Top < Find<Control>(cart, "CartRow_1").Top && cart.RectangleToScreen(cart.ClientRectangle).Contains(row7.RectangleToScreen(row7.ClientRectangle)), "Latest seller/item first and fully visible");
         Require(row7.BackColor == Color.FromArgb(221, 238, 225) && cart.Controls[0].BackColor == Color.White, "Only added row highlights");
+        await CheckSix(main);
         CheckImages(main, data, grid, card);
         CheckDrafts(main, data, grid);
         CheckColumnsAndFonts(main, data, grid);
@@ -132,6 +134,7 @@ internal static class Program
         }
         Require(data.Cart.All(l => !data.IsLocked(l.Product)), "Order close releases locks");
         tabs.SelectedIndex = 3; Find<Button>(main, "CopyAllLogs").PerformClick(); Require(Clipboard.GetText() == Find<RichTextBox>(main, "LogText").Text, "Log copy local feedback");
+        CheckReset(main);
         // Persist a tombstone while leaving the history sample untouched; drafts are intentionally not serialized.
         data.SetActive(data.Products.Single(p => p.Id == 21), false);
         Require(Find<FlowLayoutPanel>(main, "HistoryCards").Controls.Count == 3, "Deleting catalog never deletes order history");
@@ -153,10 +156,10 @@ internal static class Program
         Require(System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(manual), 8, 4) == "WEBP", "Real WebP output");
         using (var cropped = (Bitmap)ManualImages.Load(manual)) Require(cropped.Width == 100 && cropped.Height == 100 && cropped.GetPixel(3, 3).B > 200 && cropped.GetPixel(3, 3).R < 30, "Center square crop retains middle rather than stretching");
         Capture(card, "03-manual-image");
-        using var menu = card.BuildMenu(true); Require(menu.Items[0].Text == "수동 이미지 삭제" && menu.Items[2].Text == "상품 삭제", "Image context inserts manual removal before shared menu");
-        menu.Items[0].PerformClick();
+        using var menu = card.BuildMenu(); Require(menu.Items[1].Text == "이미지 삭제" && menu.Items[1].Enabled, "Shared menu enables manual image removal");
+        menu.Items[1].PerformClick();
         Require(!File.Exists(manual) && grid.Controls.Cast<Control>().SequenceEqual(refs) && grid.AutoScrollPosition == scroll && card.Bounds == bounds, "Manual removal swaps only image, preserving cards/scroll/position");
-        using var withoutManual = card.BuildMenu(true); Require(withoutManual.Items[0].Text == "상품 삭제", "Manual remove hidden when no manual image");
+        using var withoutManual = card.BuildMenu(); Require(!withoutManual.Items[1].Enabled, "Image removal disabled without manual image");
         Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty, "Image editing never adds to cart");
         card.SetManual(source); grid.AutoScrollPosition = Point.Empty;
     }
@@ -169,20 +172,38 @@ internal static class Program
         search.Text = "no-match"; supplier.SelectedItem = "쿠팡";
         Require(drafts.All(d => d.Visible) && data.Products.Count == count && data.ExportRows().Length == export, "Drafts excluded from normal count/search/seller/export/sorting");
         var draft = drafts[0]; var url = Find<TextBox>(draft, "DraftUrl"); url.Text = "https://unsupported.invalid/item/1"; draft.RegisterDraft(); Require(draft.IsDraft && url.Text.Contains("unsupported"), "Failed registration retains editable draft");
+        grid.AutoScrollPosition = new Point(0, 35); Pump();
+        var registrationOrder = grid.Items.ToArray(); var registrationBounds = draft.Bounds; var registrationScroll = grid.AutoScrollPosition;
+        Require(registrationScroll.Y < 0, "Registration also tested with nonzero scroll");
         url.Text = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000002613"; draft.RegisterDraft();
+        Require(draft.Visible && registrationOrder.SequenceEqual(grid.Items) && draft.Bounds == registrationBounds && grid.AutoScrollPosition == registrationScroll, $"URL position: visible={draft.Visible} order={registrationOrder.SequenceEqual(grid.Items)} bounds={registrationBounds} -> {draft.Bounds} scroll={registrationScroll} -> {grid.AutoScrollPosition}");
         Require(!draft.IsDraft && draft.Product!.Category == "티백" && grid.Controls.Contains(draft) && data.Products.Count == count + 1, "Mock URL success converts same card and persists category"); registeredId = draft.Product!.Id;
         Require(data.Store.LoadProducts().Any(p => p.Id == registeredId && p.Url == draft.Product.Url), "Registered sample is saved");
+        Find<Button>(main, "RefreshProducts").PerformClick(); Require(!draft.Visible && drafts[1].Visible, "Explicit refresh applies filters to registered card while retaining unfinished draft");
         category.SelectedIndex = 0; supplier.SelectedIndex = 0; search.Clear();
         Find<Button>(main, "AddProduct").PerformClick();
         Require(grid.Controls.OfType<ProductCard>().Count(c => c.IsDraft) == 2 && grid.AutoScrollPosition == Point.Empty, "Add draft scrolls top"); Capture(main, "04-drafts");
-        var product = Find<ProductCard>(grid, "Product_7"); using var menu = product.BuildMenu(false); ((ToolStripMenuItem)menu.Items[1]).DropDownItems[3].PerformClick(); Require(product.Product!.Category == "파우더", "Category update saved and same card reused");
+        var product = Find<ProductCard>(grid, "Product_7"); using var menu = product.BuildMenu(); ((ToolStripMenuItem)menu.Items[2]).DropDownItems[3].PerformClick(); Require(product.Product!.Category == "파우더", "Category update saved and same card reused");
+        void CheckList()
+        {
+            var expected = data.Products.Where(p => p.IsActive && (category.SelectedIndex == 0 || p.Category == category.Text) && (supplier.SelectedIndex == 0 || p.Supplier.Name == supplier.Text) && p.Name.Contains(search.Text.Trim(), StringComparison.CurrentCultureIgnoreCase))
+                .OrderBy(p => Array.IndexOf(SampleData.Categories, p.Category)).ThenBy(p => p.Name, StringComparer.Create(new System.Globalization.CultureInfo("ko-KR"), false)).ToArray();
+            Require(grid.Items.Where(c => !c.IsDraft).Select(c => c.Product).SequenceEqual(expected) && grid.AutoScrollPosition == Point.Empty, "Common refresh applies filters/order and resets scroll");
+            Require(grid.Items.Take(2).All(c => c.IsDraft), "Unfinished drafts retained separately at top");
+        }
+        CheckList();
+        grid.AutoScrollPosition = new Point(0, 35); category.SelectedItem = "파우더"; CheckList();
+        grid.AutoScrollPosition = new Point(0, 35); supplier.SelectedItem = "메가커피"; CheckList();
+        grid.AutoScrollPosition = new Point(0, 35); search.Text = "포모나"; CheckList();
+        grid.AutoScrollPosition = new Point(0, 35); Find<Button>(main, "RefreshProducts").PerformClick(); CheckList();
+        category.SelectedIndex = 0; supplier.SelectedIndex = 0; search.Clear();
     }
     private static void CheckColumnsAndFonts(MainForm main, SampleData data, ProductGrid grid)
     {
         var tabs = Find<TabControl>(main, "MainTabs"); var cartRegion = Find<Panel>(main, "CartRegion"); var originalWidth = cartRegion.Width;
         foreach (int columns in new[] { 3, 4, 5 })
         {
-            tabs.SelectedIndex = 4; Find<ComboBox>(main, "ProductColumnsSetting").SelectedIndex = columns - 3; tabs.SelectedIndex = 0; main.Update();
+            tabs.SelectedIndex = 0; Find<Button>(main, $"ViewColumns{columns}").PerformClick(); main.Update();
             Require(grid.Columns == columns && cartRegion.Width == originalWidth, "Columns change only product area");
             var visible = grid.Controls.OfType<ProductCard>().Where(c => c.Visible).ToArray(); Require(visible.Count(c => c.Top == visible.Min(c => c.Top)) == columns, "Requested column count");
             foreach (var card in visible)
@@ -199,7 +220,7 @@ internal static class Program
         Require(text.StartsWith("CafeOrder 글자크기 설정") && Enum.GetValues<TypographyKey>().All(k => text.Contains(k + "=")), "Copies all typography keys");
         Require(new LocalState(statePath).Preferences.FontSizes["ProductName"] == 16, "Font settings save immediately");
         Capture(main, "06-live-fonts"); Capture(window, "07-font-settings"); window.Close();
-        tabs.SelectedIndex = 4; Find<ComboBox>(main, "ProductColumnsSetting").SelectedIndex = 1; tabs.SelectedIndex = 0;
+        tabs.SelectedIndex = 0; Find<Button>(main, "ViewColumns4").PerformClick();
     }
     private static void CheckHistory(MainForm main)
     {
@@ -217,7 +238,7 @@ internal static class Program
         var tabs = Find<TabControl>(main, "MainTabs");
         foreach (int columns in new[] { 3, 4, 5 })
         {
-            tabs.SelectedIndex = 4; Find<ComboBox>(main, "ProductColumnsSetting").SelectedIndex = columns - 3; tabs.SelectedIndex = 0;
+            tabs.SelectedIndex = 0; Find<Button>(main, $"ViewColumns{columns}").PerformClick();
             foreach (var size in new[] { new Size(1000, 600), new Size(1280, 720) })
             {
                 main.Size = size; main.Update();
@@ -227,7 +248,7 @@ internal static class Program
                 foreach (var card in grid.Controls.OfType<ProductCard>().Where(c => c.Visible && c.Product != null))
                 {
                     var needed = TextRenderer.MeasureText(card.PriceDisplayText, fonts.Font(TypographyKey.ProductPrice), new Size(card.PriceBounds.Width, 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
-                    Require(needed.Height <= card.PriceBounds.Height && needed.Width <= card.PriceBounds.Width, "Large price font fits at every column/window width");
+                    Require(!card.PriceDisplayText.Contains(Environment.NewLine) && card.PriceBounds.Height == fonts.Font(TypographyKey.ProductPrice).Height + 2, "Price uses one line with ellipsis at every column/window width");
                     Require(card.ImageBounds.Width == card.ImageBounds.Height && card.ClientRectangle.Contains(card.PriceBounds), "Large fonts preserve square images and content bounds");
                 }
                 foreach (var row in All(Find<FlowLayoutPanel>(main, "CartList")).OfType<CartProductRow>())
@@ -244,7 +265,7 @@ internal static class Program
             Capture(order, "13-large-font-order"); order.Close();
         }
         foreach (var item in before) fonts.Set(item.Key, item.Value);
-        tabs.SelectedIndex = 4; Find<ComboBox>(main, "ProductColumnsSetting").SelectedIndex = 1; tabs.SelectedIndex = 0;
+        tabs.SelectedIndex = 0; Find<Button>(main, "ViewColumns4").PerformClick();
     }
     private static void CheckSuppliers(MainForm main)
     {
@@ -260,9 +281,9 @@ internal static class Program
         Require(!grid.Controls.OfType<ProductCard>().Any(c => c.IsDraft), "Drafts never restored");
         Require(data.Products.Single(p => p.Id == 21).IsActive == false && !grid.Controls.OfType<ProductCard>().Any(c => c.Product?.Id == 21), "Tombstone survives and is hidden after restart");
         Require(grid.Controls.OfType<ProductCard>().Any(c => c.Product?.Id == registeredId), "Registered mock product restored");
-        Require(data.Store.Preferences.Columns == 4 && grid.Columns == 4 && Ui.Fonts!.Size(TypographyKey.ProductName) == 16, "Columns and typography restored");
+        Require(data.Store.Preferences.Columns == 4 && grid.Columns == 4 && Enum.GetValues<TypographyKey>().All(k => Ui.Fonts!.Size(k) == Typography.DefaultSize(k)), "Columns and typography restored");
         Require(main.Bounds == new Rectangle(savedWindow!.X, savedWindow.Y, savedWindow.Width, savedWindow.Height), "Window position and size restored exactly");
-        using var menu = Find<ProductCard>(grid, "Product_1").BuildMenu(true); Require(menu.Items[0].Text == "수동 이미지 삭제", "Manual image restored");
+        using var menu = Find<ProductCard>(grid, "Product_1").BuildMenu(); Require(menu.Items[1].Enabled, "Manual image restored");
         Capture(main, "12-restarted"); main.WindowState = FormWindowState.Maximized; return Task.CompletedTask;
     }
     private static Task CheckOffscreen(MainForm main)

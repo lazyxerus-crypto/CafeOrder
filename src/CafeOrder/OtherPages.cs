@@ -73,18 +73,10 @@ internal static class OtherPages
         var toolbar = Ui.Row(copy); toolbar.Dock = DockStyle.Top;
         var panel = new SoftPanel { Dock = DockStyle.Fill }; panel.Controls.Add(log); panel.Controls.Add(toolbar); return panel;
     }
-    public static Control Settings(SampleData data, Action columnsChanged, Action openTypography)
+    public static Control Settings(SampleData data, Action openTypography)
     {
         var list = Ui.List("Settings");
-        var columns = Ui.Combo(["3개", "4개", "5개"], "ProductColumnsSetting"); columns.SelectedIndex = data.Store.Preferences.Columns - 3;
-        var status = Ui.Text("");
-        columns.SelectedIndexChanged += (_, _) =>
-        {
-            int previous = data.Store.Preferences.Columns; data.Store.Preferences.Columns = columns.SelectedIndex + 3;
-            try { data.Store.SavePreferences(); columnsChanged(); status.Text = ""; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { data.Store.Preferences.Columns = previous; status.Text = "설정 저장 실패 · 다시 시도해주세요"; }
-        };
-        list.Controls.Add(Ui.Column(Ui.Text("상품 한 줄 표시 개수", true), columns, Ui.Button("글자 크기 상세 설정", openTypography, name: "OpenTypography"), status));
+        list.Controls.Add(Ui.Column(Ui.Button("글자 크기 상세 설정", openTypography, name: "OpenTypography")));
         list.Controls.Add(Ui.Column(Ui.Text("백업", true), Ui.Text("자동 백업 기본 기준: 하루 1회\n프로그램 업데이트 전 · 데이터 형식 변경 전 · 데이터 가져오기 전"),
             Ui.Text("무료배송 기준은 판매처관리에서 확인할 수 있습니다.")));
         return list;

@@ -84,13 +84,15 @@ internal static class Ui
     }
     private static void FitItem(FlowLayoutPanel list, Control c)
     {
-        int width = Math.Max(120, list.ClientSize.Width - list.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth - 4);
+        int width = Math.Max(120, ReservedClientWidth(list) - list.Padding.Horizontal - 4);
         if (c.Width == width && c.MaximumSize.Width == width) return;
         c.MinimumSize = Size.Empty;
         c.MaximumSize = new Size(width, 0);
         c.Width = width;
         if (c.AutoSize) c.MinimumSize = new Size(width, 0);
     }
+    internal static int ReservedClientWidth(ScrollableControl control) => control.ClientSize.Width -
+        (control.VerticalScroll.Visible ? 0 : SystemInformation.VerticalScrollBarWidth);
     public static void Clear(Control parent)
     {
         foreach (var c in parent.Controls.Cast<Control>().ToArray()) c.Dispose();

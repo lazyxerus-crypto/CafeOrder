@@ -7,7 +7,7 @@ public record Product(int Id, string Name, decimal Price, string PriceNote,
     public bool Available { get; set; } = Available;
     public string Category { get; set; } = Category;
     public bool IsActive { get; set; } = true;
-    // Deliberately non-routable sample URLs; the mockup never opens these.
+    // Non-routable sample URLs. Only an explicit product-link command invokes the default browser.
     public string Url { get; set; } = $"https://example.invalid/product/{Id}";
     public string PriceText => $"{Price:N0}원{(PriceNote.Length == 0 ? "" : $" ({PriceNote})")}";
 }
@@ -140,9 +140,8 @@ public sealed class SampleData
         var product = new Product(Products.Max(p => p.Id) + 1, source.Name, source.Price, source.PriceNote, seller, category, true, 0) { Url = url.Trim() };
         Products.Add(product);
         try { Store.SaveProducts(Products); } catch { Products.Remove(product); throw; }
-        return product; // The same draft control adopts this record before catalog sorting.
+        return product; // The same draft control adopts this record without refreshing or sorting the catalog.
     }
-    public void CatalogUpdated() => CatalogChanged?.Invoke();
     public ProductTransferRow[] ExportRows() => Products.Select(p => new ProductTransferRow(p.Id, p.Supplier.Name, p.Name, p.Price, p.PriceNote, p.Category, p.Url, p.IsActive)).ToArray();
 
     public decimal Subtotal(IEnumerable<CartLine> lines) => lines.Sum(x => x.Product.Price * x.Quantity);

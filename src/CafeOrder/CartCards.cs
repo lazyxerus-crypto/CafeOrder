@@ -65,7 +65,7 @@ internal sealed class CartProductRow : BufferedPanel
     }
     public override Size GetPreferredSize(Size proposedSize)
     {
-        int contentBottom = TitleHeight(proposedSize.Width) + PriceHeight(proposedSize.Width) + 4;
+        int contentBottom = Math.Max(TitleHeight(proposedSize.Width), RemoveSize) + PriceHeight(proposedSize.Width) + 4;
         if (order != null) contentBottom += 4 + Ui.ActionHeight(order, Math.Max(40, proposedSize.Width - Thumb - 12));
         else if (minus != null) contentBottom += 4 + Math.Max(36, minus.Font.Height + 14);
         return new(proposedSize.Width, Math.Max(contentBottom, 4 + Thumb) + 4);
@@ -78,7 +78,7 @@ internal sealed class CartProductRow : BufferedPanel
         image.SetBounds(0, 4, thumb, thumb);
         remove.SetBounds(Width - RemoveSize - 4, 2, RemoveSize, RemoveSize);
         title.SetBounds(x, 2, Math.Max(24, width - RemoveSize - 4), TitleHeight(Width));
-        price.SetBounds(x, title.Bottom + 2, width, PriceHeight(Width));
+        price.SetBounds(x, Math.Max(title.Bottom, remove.Bottom) + 2, width, PriceHeight(Width));
         int y = price.Bottom + 4, buttonSize = Math.Max(36, (minus?.Font.Height ?? unit) + 14);
         if (order != null) order.SetBounds(x, y, width, Ui.ActionHeight(order, width));
         else if (minus != null)
@@ -100,27 +100,36 @@ internal sealed class SupplierCartCard : SoftPanel
     private readonly Button order;
     private readonly Dictionary<int, CartProductRow> rows = [];
     private CartLine[] lines = [];
+    private int measureVersion, measuredVersion = -1, measuredWidth = -1, measuredHeight;
+    private void InvalidateMeasure() { measureVersion++; PerformLayout(); Parent?.PerformLayout(); }
     internal CartProductRow Row(int id) => rows[id];
     public SupplierCartCard(SampleData data, Supplier supplier, Action<CartLine[]> open)
     {
         this.data = data; this.supplier = supplier; this.open = open;
         Name = $"Cart_{supplier.Id}"; BackColor = Color.White; Margin = new Padding(0, 0, 0, 10);
+        AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink;
         heading = Ui.SellerHeading(supplier); heading.Dock = DockStyle.None; heading.AutoSize = false;
         subtotal = Ui.Text("", true); subtotal.Dock = DockStyle.None; subtotal.AutoSize = false;
         order = Ui.Button("주문하기", () => { if (data.Shortfall(supplier, lines) == 0) open(lines); }, true, $"SupplierOrder_{supplier.Id}");
         order.AutoSize = false; Controls.Add(heading);
         if (!supplier.Manual) Controls.AddRange([subtotal, order]);
+        foreach (Control child in heading.Controls) child.FontChanged += (_, _) => InvalidateMeasure();
+        subtotal.FontChanged += (_, _) => InvalidateMeasure(); order.FontChanged += (_, _) => InvalidateMeasure();
     }
     public void Sync(CartLine[] current)
     {
         bool structural = !lines.Select(x => x.Product.Id).SequenceEqual(current.Select(x => x.Product.Id));
+        if (structural) measureVersion++;
         if (structural) SuspendLayout();
         lines = current;
         foreach (int id in rows.Keys.Except(current.Select(x => x.Product.Id)).ToArray()) { rows[id].Dispose(); rows.Remove(id); }
         foreach (var line in lines)
         {
             if (!rows.TryGetValue(line.Product.Id, out var row))
-            { row = new CartProductRow(data, line); rows[line.Product.Id] = row; Controls.Add(row); }
+            {
+                row = new CartProductRow(data, line); rows[line.Product.Id] = row; Controls.Add(row);
+                foreach (Control child in row.Controls) child.FontChanged += (_, _) => InvalidateMeasure();
+            }
             row.RefreshQuantity();
         }
         if (!supplier.Manual)
@@ -128,27 +137,40 @@ internal sealed class SupplierCartCard : SoftPanel
             string text = $"소계 {data.Subtotal(lines):N0}원"; if (subtotal.Text != text) subtotal.Text = text;
             decimal shortage = data.Shortfall(supplier, lines);
             string action = shortage > 0 ? $"{shortage:N0}원 부족" : "주문하기";
-            if (order.Text != action) order.Text = action;
+            if (order.Text != action) { measureVersion++; order.Text = action; }
             order.BackColor = shortage > 0 ? Ui.Danger : Ui.Accent; order.ForeColor = Color.White;
             order.Enabled = shortage == 0;
         }
         if (structural) { ResumeLayout(true); PerformLayout(); }
     }
-    protected override void OnLayout(LayoutEventArgs e)
+    public override Size GetPreferredSize(Size proposedSize)
     {
-        base.OnLayout(e); if (heading == null) return;
-        int unit = Math.Max(19, Font.Height), x = 10, width = Math.Max(100, Width - 20), y = 10;
-        heading.SetBounds(x, y, width, Math.Max(36, heading.GetPreferredSize(new Size(width, 0)).Height)); y += heading.Height + 6;
+        int width = MaximumSize.Width > 0 ? MaximumSize.Width : Math.Max(120, proposedSize.Width);
+        if (measuredWidth != width || measuredVersion != measureVersion)
+        { measuredHeight = Arrange(width, false); measuredWidth = width; measuredVersion = measureVersion; }
+        return new Size(width, measuredHeight);
+    }
+    private int Arrange(int outerWidth, bool apply)
+    {
+        if (heading == null) return 0;
+        int x = 10, width = Math.Max(100, outerWidth - 20), y = 10;
+        int headingHeight = Math.Max(36, heading.GetPreferredSize(new Size(width, 0)).Height);
+        if (apply) heading.SetBounds(x, y, width, headingHeight); y += headingHeight + 6;
         foreach (var line in lines)
         {
             var row = rows[line.Product.Id]; int height = row.GetPreferredSize(new Size(width, 0)).Height;
-            row.SetBounds(x, y, width, height); y += height + 10;
+            if (apply) row.SetBounds(x, y, width, height); y += height + 10;
         }
         if (!supplier.Manual)
         {
-            subtotal.SetBounds(x, y, width, subtotal.Font.Height + 8); y += subtotal.Height + 6;
-            order.SetBounds(x, y, width, Ui.ActionHeight(order, width)); y += order.Height + 10;
+            int subtotalHeight = subtotal.Font.Height + 8, orderHeight = Ui.ActionHeight(order, width);
+            if (apply) subtotal.SetBounds(x, y, width, subtotalHeight); y += subtotalHeight + 6;
+            if (apply) order.SetBounds(x, y, width, orderHeight); y += orderHeight + 10;
         }
-        if (Height != y + 4) Height = y + 4;
+        return y + 4;
+    }
+    protected override void OnLayout(LayoutEventArgs e)
+    {
+        base.OnLayout(e); Arrange(Width, true);
     }
 }

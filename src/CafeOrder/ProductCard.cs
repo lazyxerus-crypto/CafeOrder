@@ -5,17 +5,20 @@ public sealed class ProductCard : Panel
 {
     public Product? Product;
     private readonly SampleData data;
-    private readonly string draftCategory;
+    private string draftCategory;
+    internal event Action? Registered;
+    internal event Action? DeleteDraft;
     private TextBox? url;
     private readonly Button undo;
     private Image? manual;
     private string feedback = "";
-    private (int Width, float FontSize, string Text) priceDisplayKey;
-    private string priceDisplay = "";
     private bool pressed, dragging, flashing;
     private Point pressedAt;
     private readonly System.Windows.Forms.Timer highlight = new() { Interval = 160 };
-    private readonly ToolTip hint = new();
+    private readonly ToolTip hint = new() { ShowAlways = true };
+    private readonly System.Windows.Forms.Timer hover = new() { Interval = 450 };
+    private Point hoverPoint;
+    private bool checking;
     private ContextMenuStrip? menu;
     public bool IsDraft => Product == null;
     internal Rectangle ImageBounds { get; private set; }
@@ -23,41 +26,27 @@ public sealed class ProductCard : Panel
     internal Rectangle PriceBounds { get; private set; }
     private Font Role(TypographyKey key, FontStyle style = FontStyle.Regular) => Ui.Fonts!.Font(key, style);
     private int InnerWidth(int width) => Math.Max(24, width - 20);
-    private static readonly Dictionary<(int Width, float Size), int> headerHeights = [], priceHeights = [];
+    private static readonly Dictionary<(int Width, float Size), int> headerHeights = [];
     private int HeaderHeight(int width)
     {
-        var font = Role(TypographyKey.Category); var key = (width, font.Size);
+        var font = Role(TypographyKey.Category, FontStyle.Bold); var key = (width, font.Size);
         if (!headerHeights.TryGetValue(key, out int height))
         { if (headerHeights.Count > 128) headerHeights.Clear(); headerHeights[key] = height = Math.Max(30, SampleData.Categories.Skip(1).Max(c => TextRenderer.MeasureText(c, font, new Size(Math.Max(30, InnerWidth(width) - 38), 0), TextFormatFlags.WordBreak).Height)); }
         return height;
     }
     private int NameHeight => Role(TypographyKey.ProductName, FontStyle.Bold).Height * 3 + 4;
-    private int PriceHeight(int width)
+    private int PriceHeight(int width) => Role(TypographyKey.ProductPrice).Height + 2;
+    internal string PriceDisplayText => Product?.PriceText ?? "";
+    internal string TooltipAt(Point location) => Product == null ? "상품 링크 입력 후 Enter" : PriceBounds.Contains(location) ? Product.PriceText : Product.Name;
+    internal static System.Diagnostics.ProcessStartInfo LinkStartInfo(string url) => new(url) { UseShellExecute = true };
+    private void ArmHint(Point point)
     {
-        var font = Role(TypographyKey.ProductPrice); var key = (width, font.Size);
-        if (!priceHeights.TryGetValue(key, out int height))
-        { if (priceHeights.Count > 128) priceHeights.Clear(); priceHeights[key] = height = new[] { "14,500원 (메가회원가)", "108,000원" }.Max(text => TextRenderer.MeasureText(WrapPrice(text, font, InnerWidth(width)), font, new Size(InnerWidth(width), 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPadding).Height + 2); }
-        return height;
+        hoverPoint = point; hint.SetToolTip(this, TooltipAt(point)); hover.Stop(); hover.Start();
     }
-    private static string WrapPrice(string text, Font font, int width)
+    private void ShowMenu(Point point)
     {
-        var lines = new List<string>(); string line = "";
-        foreach (char c in text)
-        {
-            if (line.Length > 0 && TextRenderer.MeasureText(line + c, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width > width) { lines.Add(line.TrimEnd()); line = ""; }
-            if (line.Length > 0 || c != ' ') line += c;
-        }
-        lines.Add(line); return string.Join(Environment.NewLine, lines);
-    }
-    internal string PriceDisplayText
-    {
-        get
-        {
-            if (Product == null) return "";
-            var font = Role(TypographyKey.ProductPrice); var key = (PriceBounds.Width, font.Size, Product.PriceText);
-            if (priceDisplayKey != key) { priceDisplayKey = key; priceDisplay = WrapPrice(Product.PriceText, font, PriceBounds.Width); }
-            return priceDisplay;
-        }
+        hover.Stop(); hint.Hide(this); menu?.Dispose(); menu = BuildMenu();
+        menu.Closed += (_, _) => ArmHint(point); menu.Show(this, point);
     }
     public ProductCard(Product? product, SampleData data, string draftCategory = "기타")
     {
@@ -69,9 +58,10 @@ public sealed class ProductCard : Panel
         if (IsDraft)
         {
             url = new TextBox { Name = "DraftUrl", PlaceholderText = "https://", MaxLength = 2048 };
-            Ui.Role(url, TypographyKey.General); Controls.Add(url);
+            Ui.Role(url, TypographyKey.General); Controls.Add(url); url.ContextMenuStrip = BuildMenu();
             url.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; RegisterDraft(); } };
         }
+        hover.Tick += (_, _) => { hover.Stop(); if (!IsDisposed && Visible && menu?.Visible != true) hint.Show(TooltipAt(hoverPoint), this, hoverPoint.X, hoverPoint.Y + 22, 5000); };
         highlight.Tick += (_, _) => { highlight.Stop(); flashing = false; Invalidate(); };
         data.ProductChanged += Changed;
         if (Product != null) LoadManual();
@@ -94,14 +84,15 @@ public sealed class ProductCard : Panel
     internal void RegisterDraft()
     {
         if (url == null || string.IsNullOrWhiteSpace(url.Text)) return;
-        Run(() =>
+        void Register()
         {
             Product = data.RegisterMock(url.Text, draftCategory); Name = $"Product_{Product.Id}";
-            url.Dispose(); url = null; SyncState(); PerformLayout(); data.CatalogUpdated();
-        });
+            url.ContextMenuStrip?.Dispose(); url.Dispose(); url = null; SyncState(); PerformLayout(); Registered?.Invoke();
+        }
+        Run(() => { if (Parent is ProductGrid grid) grid.UpdateInPlace(Register); else Register(); });
     }
     public override Size GetPreferredSize(Size proposedSize) => new(proposedSize.Width,
-        10 + HeaderHeight(proposedSize.Width) + 6 + InnerWidth(proposedSize.Width) + 6 + NameHeight + 3 + PriceHeight(proposedSize.Width) + 10 + (feedback.Length > 0 ? Role(TypographyKey.General).Height * 2 : 0));
+        10 + HeaderHeight(proposedSize.Width) + 6 + InnerWidth(proposedSize.Width) + 6 + NameHeight + 3 + PriceHeight(proposedSize.Width) + 10);
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e); if (undo == null || Ui.Fonts == null) return;
@@ -118,9 +109,10 @@ public sealed class ProductCard : Panel
         base.OnPaint(e); if (Ui.Fonts == null) return;
         var g = e.Graphics;
         if (pressed || flashing) { using var flash = new SolidBrush(Color.FromArgb(230, 241, 232)); g.FillRectangle(flash, ClientRectangle); }
+        if (Product is { Available: false, IsActive: true }) { using var tint = new SolidBrush(Color.FromArgb(255, 230, 230)); g.FillRectangle(tint, ClientRectangle); }
         int header = HeaderHeight(Width);
         if (Product != null) g.DrawImage(SampleImages.Seller(Product.Supplier), new Rectangle(10, 10, 28, 28));
-        TextRenderer.DrawText(g, Product?.Category ?? draftCategory, Role(TypographyKey.Category), new Rectangle(48, 10, Math.Max(24, Width - 58), header), Ui.Ink,
+        TextRenderer.DrawText(g, Product?.Category ?? draftCategory, Role(TypographyKey.Category, FontStyle.Bold), new Rectangle(48, 10, Math.Max(24, Width - 58), header), Ui.Ink,
             TextFormatFlags.Right | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
         if (Product == null)
         {
@@ -140,8 +132,13 @@ public sealed class ProductCard : Panel
                 TextRenderer.DrawText(g, "M", Role(TypographyKey.Category, FontStyle.Bold), badge, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
             TextRenderer.DrawText(g, Product.Name, Role(TypographyKey.ProductName, FontStyle.Bold), NameBounds, Ui.Ink, TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl);
-            TextRenderer.DrawText(g, PriceDisplayText, Role(TypographyKey.ProductPrice), PriceBounds, Ui.Ink, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
-            if (!Product.Available) TextRenderer.DrawText(g, "품절 · 클릭하여 재확인", Role(TypographyKey.General), ImageBounds, Ui.Danger, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+            TextRenderer.DrawText(g, PriceDisplayText, Role(TypographyKey.ProductPrice), PriceBounds, Ui.Ink, TextFormatFlags.Right | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+            if (!Product.Available)
+            {
+                using var tint = new SolidBrush(Color.FromArgb(155, 255, 215, 215)); g.FillRectangle(tint, ImageBounds);
+                using var soldFont = new Font("Malgun Gothic", Math.Max(20, Role(TypographyKey.SectionTitle).Size), FontStyle.Bold);
+                TextRenderer.DrawText(g, checking ? "확인 중" : "품절", soldFont, ImageBounds, Ui.Danger, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+            }
             if (!Product.IsActive)
             {
                 using var red = new SolidBrush(Color.FromArgb(150, 190, 45, 45)); g.FillRectangle(red, ClientRectangle);
@@ -149,36 +146,49 @@ public sealed class ProductCard : Panel
                 TextRenderer.DrawText(g, "삭제됨", Role(TypographyKey.SectionTitle, FontStyle.Bold), new Rectangle(0, Height / 2 - textHeight, Width, textHeight), Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
-        if (feedback.Length > 0) TextRenderer.DrawText(g, feedback, Role(TypographyKey.General), new Rectangle(10, PriceBounds.Bottom, Width - 20, Height - PriceBounds.Bottom), Ui.Danger, TextFormatFlags.WordBreak);
+        if (feedback.Length > 0) TextRenderer.DrawText(g, feedback, Role(TypographyKey.General), new Rectangle(10, ImageBounds.Bottom - Role(TypographyKey.General).Height * 2, Width - 20, Role(TypographyKey.General).Height * 2), Ui.Danger, TextFormatFlags.WordBreak);
         UiBorder.Draw(g, ClientRectangle);
     }
     protected override void OnMouseDown(MouseEventArgs e)
-    { base.OnMouseDown(e); pressed = e.Button == MouseButtons.Left && Product is { IsActive: true }; dragging = false; pressedAt = e.Location; Invalidate(); }
+    { base.OnMouseDown(e); hover.Stop(); hint.Hide(this); pressed = e.Button == MouseButtons.Left && Product is { IsActive: true }; dragging = false; pressedAt = e.Location; Invalidate(); }
     protected override void OnMouseMove(MouseEventArgs e)
-    { base.OnMouseMove(e); if (pressed && (Math.Abs(e.X - pressedAt.X) > SystemInformation.DragSize.Width || Math.Abs(e.Y - pressedAt.Y) > SystemInformation.DragSize.Height)) dragging = true; }
+    { base.OnMouseMove(e); if (e.Button == MouseButtons.None) ArmHint(e.Location); if (pressed && (Math.Abs(e.X - pressedAt.X) > SystemInformation.DragSize.Width || Math.Abs(e.Y - pressedAt.Y) > SystemInformation.DragSize.Height)) dragging = true; }
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e); bool activate = pressed && !dragging && ClientRectangle.Contains(e.Location); pressed = false;
-        if (e.Button == MouseButtons.Right && Product is { IsActive: true }) { menu?.Dispose(); menu = BuildMenu(ImageBounds.Contains(e.Location)); menu.Show(this, e.Location); }
+        if (e.Button == MouseButtons.Right && (IsDraft || Product is { IsActive: true })) ShowMenu(e.Location);
         else if (e.Button == MouseButtons.Left && activate && Product is { IsActive: true } product)
         {
-            if (!product.Available) data.Recheck(product);
-            else if (!data.IsLocked(product)) { data.AddToCart(product); flashing = true; highlight.Stop(); highlight.Start(); }
+            if (!product.Available && !product.Supplier.Manual && !checking)
+            {
+                checking = true; Invalidate(); Update();
+                BeginInvoke(() => { if (IsDisposed) return; data.Recheck(product); checking = false; Invalidate(); });
+            }
+            else if (product.Available && !data.IsLocked(product)) { data.AddToCart(product); flashing = true; highlight.Stop(); highlight.Start(); }
         }
-        Invalidate();
+        ArmHint(e.Location); Invalidate();
     }
-    protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); pressed = false; Invalidate(); }
-    internal ContextMenuStrip BuildMenu(bool imageArea)
+    protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover.Stop(); hint.Hide(this); pressed = false; Invalidate(); }
+    internal ContextMenuStrip BuildMenu()
     {
-        var context = new ContextMenuStrip(); if (Product is not { IsActive: true } product) return context;
-        if (imageArea && manual != null) { context.Items.Add("수동 이미지 삭제", null, (_, _) => Run(RemoveManual)); context.Items.Add(new ToolStripSeparator()); }
-        context.Items.Add("상품 삭제", null, (_, _) => Run(() => data.SetActive(product, false)));
+        var context = new ContextMenuStrip(); var product = Product;
+        if (product is { IsActive: false }) return context;
+        context.Items.Add("상품 삭제", null, (_, _) => { if (product == null) DeleteDraft?.Invoke(); else Run(() => data.SetActive(product, false)); });
+        var imageDelete = context.Items.Add("이미지 삭제", null, (_, _) => Run(RemoveManual)); imageDelete.Enabled = manual != null;
         var categories = new ToolStripMenuItem("카테고리 변경");
-        foreach (var category in SampleData.Categories.Skip(1)) categories.DropDownItems.Add(category, null, (_, _) => Run(() => data.SetCategory(product, category)));
-        context.Items.Add(categories); context.Items.Add(new ToolStripSeparator());
-        context.Items.Add("이름 복사", null, (_, _) => Copy(product.Name));
-        context.Items.Add("가격 복사", null, (_, _) => Copy(product.PriceText));
-        context.Items.Add("이름 + 가격 복사", null, (_, _) => Copy(product.Name + Environment.NewLine + product.PriceText));
+        foreach (var category in SampleData.Categories.Skip(1)) categories.DropDownItems.Add(category, null, (_, _) =>
+        { if (product == null) { draftCategory = category; Invalidate(); } else Run(() => data.SetCategory(product, category)); });
+        context.Items.Add(categories);
+        var link = context.Items.Add("상품 링크", null, (_, _) =>
+        {
+            try { System.Diagnostics.Process.Start(LinkStartInfo(product!.Url)); }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { feedback = "상품 링크를 열지 못했습니다"; Invalidate(); }
+        });
+        link.Enabled = !string.IsNullOrWhiteSpace(product?.Url);
+        context.Items.Add(new ToolStripSeparator());
+        var name = context.Items.Add("이름 복사", null, (_, _) => Copy(product!.Name)); name.Enabled = !string.IsNullOrEmpty(product?.Name);
+        var price = context.Items.Add("가격 복사", null, (_, _) => Copy(product!.PriceText)); price.Enabled = !string.IsNullOrEmpty(product?.PriceText);
+        var both = context.Items.Add("이름 + 가격 복사", null, (_, _) => Copy(product!.Name + Environment.NewLine + product.PriceText)); both.Enabled = name.Enabled && price.Enabled;
         return context;
     }
     private void Copy(string text) { try { Clipboard.SetText(text); } catch (System.Runtime.InteropServices.ExternalException) { feedback = "복사하지 못했습니다"; Invalidate(); } }
@@ -208,15 +218,27 @@ public sealed class ProductCard : Panel
         dragging = false;
     }
     protected override void Dispose(bool disposing)
-    { if (disposing) { data.ProductChanged -= Changed; highlight.Dispose(); hint.Dispose(); manual?.Dispose(); menu?.Dispose(); } base.Dispose(disposing); }
+    { if (disposing) { data.ProductChanged -= Changed; menu?.Dispose(); url?.ContextMenuStrip?.Dispose(); highlight.Dispose(); hover.Dispose(); hint.Dispose(); manual?.Dispose(); } base.Dispose(disposing); }
 }
 
 internal sealed class ProductGrid : BufferedPanel
 {
     private ProductCard[] ordered = [];
+    internal IReadOnlyList<ProductCard> Items => ordered;
+    internal void Prepend(ProductCard card) => SetItems([card, .. ordered]);
+    internal void RemoveItem(ProductCard card) => SetItems(ordered.Where(c => c != card).ToArray(), false);
     private bool arranging;
+    private bool keepViewport;
     internal int Columns = 3;
     public ProductGrid() { Name = "ProductList"; Dock = DockStyle.Fill; AutoScroll = true; BackColor = Ui.Background; }
+    internal void UpdateInPlace(Action update)
+    {
+        // Removing the focused URL textbox otherwise auto-scrolls the next focused card into view.
+        var scroll = AutoScrollPosition; keepViewport = true; SuspendLayout();
+        try { update(); }
+        finally { AutoScrollPosition = new Point(-scroll.X, -scroll.Y); ResumeLayout(false); keepViewport = false; PerformLayout(); }
+    }
+    protected override Point ScrollToControl(Control activeControl) => keepViewport ? AutoScrollPosition : base.ScrollToControl(activeControl);
     public void SetItems(ProductCard[] cards, bool resetScroll = true)
     {
         SuspendLayout(); ordered = cards; var visible = cards.ToHashSet();
@@ -228,7 +250,7 @@ internal sealed class ProductGrid : BufferedPanel
         if (arranging || Ui.Fonts == null) return; arranging = true;
         try
         {
-            base.OnLayout(e); int gap = 10, width = Math.Max(40, (ClientSize.Width - SystemInformation.VerticalScrollBarWidth - gap * (Columns + 1)) / Columns);
+            base.OnLayout(e); int gap = 10, width = Math.Max(40, (Ui.ReservedClientWidth(this) - gap * (Columns + 1)) / Columns);
             int height = ordered.Length == 0 ? 0 : ordered.Max(x => x.GetPreferredSize(new Size(width, 0)).Height);
             for (int i = 0; i < ordered.Length; i++) ordered[i].Bounds = new Rectangle(gap + i % Columns * (width + gap) + AutoScrollPosition.X, gap + i / Columns * (height + gap) + AutoScrollPosition.Y, width, height);
             var extent = new Size(0, gap + ((ordered.Length + Columns - 1) / Columns) * (height + gap));

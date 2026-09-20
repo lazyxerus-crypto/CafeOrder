@@ -17,7 +17,7 @@ public partial class MainForm : Form
         tabs.TabPages[1].Controls.Add(OtherPages.History(sample));
         tabs.TabPages[2].Controls.Add(OtherPages.Suppliers(sample));
         tabs.TabPages[3].Controls.Add(OtherPages.Logs(sample));
-        tabs.TabPages[4].Controls.Add(OtherPages.Settings(sample, products.ApplyColumns, OpenTypography));
+        tabs.TabPages[4].Controls.Add(OtherPages.Settings(sample, OpenTypography));
         typography.Changed += () =>
         {
             products.ApplyColumns();

@@ -12,7 +12,8 @@ public sealed class Typography : IDisposable
     public event Action? Changed;
     public Typography(LocalState store) => this.store = store;
     public float Size(TypographyKey key) => store.Preferences.FontSizes.TryGetValue(key.ToString(), out float size) && float.IsFinite(size)
-        ? Math.Clamp(size, 9, 24) : key switch { TypographyKey.ProductPrice => 13, TypographyKey.SectionTitle => 13, TypographyKey.General or TypographyKey.Category or TypographyKey.CartProductName or TypographyKey.CartPrice or TypographyKey.OrderProductName or TypographyKey.OrderInfo or TypographyKey.HistoryProductName or TypographyKey.HistoryInfo or TypographyKey.SupplierManagement => 11.5f, _ => 12 };
+        ? Math.Clamp(size, 9, 24) : DefaultSize(key);
+    internal static float DefaultSize(TypographyKey key) => key switch { TypographyKey.ProductPrice => 13, TypographyKey.SectionTitle => 13, TypographyKey.General or TypographyKey.Category or TypographyKey.CartProductName or TypographyKey.CartPrice or TypographyKey.OrderProductName or TypographyKey.OrderInfo or TypographyKey.HistoryProductName or TypographyKey.HistoryInfo or TypographyKey.SupplierManagement => 11.5f, _ => 12 };
     public T Bind<T>(T control, TypographyKey key, FontStyle? style = null) where T : Control
     {
         bool exists = controls.ContainsKey(control);
@@ -38,6 +39,18 @@ public sealed class Typography : IDisposable
         var old = store.Preferences.FontSizes.GetValueOrDefault(key.ToString(), Size(key));
         store.Preferences.FontSizes[key.ToString()] = size;
         try { store.SavePreferences(); } catch { store.Preferences.FontSizes[key.ToString()] = old; throw; }
+        ApplyAll();
+    }
+    public void ResetDefaults()
+    {
+        var old = store.Preferences.FontSizes.ToDictionary(x => x.Key, x => x.Value);
+        store.Preferences.FontSizes.Clear();
+        try { store.SavePreferences(); }
+        catch { foreach (var item in old) store.Preferences.FontSizes[item.Key] = item.Value; throw; }
+        ApplyAll();
+    }
+    private void ApplyAll()
+    {
         var roots = Application.OpenForms.Cast<Form>().ToArray(); foreach (var form in roots) form.SuspendLayout();
         try { foreach (var control in controls.Keys.ToArray()) if (!control.IsDisposed) Apply(control); Changed?.Invoke(); }
         finally { foreach (var form in roots) if (!form.IsDisposed) { form.ResumeLayout(true); form.PerformLayout(); } }
@@ -55,13 +68,26 @@ internal sealed class TypographyForm : Form
         StartPosition = FormStartPosition.CenterParent; var list = Ui.List("TypographyFields");
         var copy = Ui.Button("전체 설정 복사", () => { }, name: "CopyTypography");
         copy.Click += (_, _) => { try { Clipboard.SetText(fonts.CopyText()); copy.Text = "복사됨"; } catch (System.Runtime.InteropServices.ExternalException) { copy.Text = "복사 실패 · 다시 시도"; } };
+        bool updating = false; var inputs = new Dictionary<TypographyKey, NumericUpDown>();
         foreach (var key in Enum.GetValues<TypographyKey>())
         {
             var input = Ui.Role(new NumericUpDown { Name = "Font_" + key, Minimum = 9, Maximum = 24, DecimalPlaces = 1, Increment = .5m, Value = (decimal)fonts.Size(key), Width = 110 }, TypographyKey.General);
             var label = Ui.Text(key.ToString()); label.MaximumSize = new Size(240, 0); label.MinimumSize = new Size(200, 0);
-            input.ValueChanged += (_, _) => { try { fonts.Set(key, (float)input.Value); copy.Text = "전체 설정 복사"; } catch (IOException) { copy.Text = "설정 저장 실패 · 다시 시도"; } catch (UnauthorizedAccessException) { copy.Text = "설정 저장 권한 없음"; } };
+            inputs[key] = input;
+            input.ValueChanged += (_, _) => { if (updating) return; try { fonts.Set(key, (float)input.Value); copy.Text = "전체 설정 복사"; } catch (IOException) { copy.Text = "설정 저장 실패 · 다시 시도"; } catch (UnauthorizedAccessException) { copy.Text = "설정 저장 권한 없음"; } };
             list.Controls.Add(Ui.Row(label, input));
         }
-        copy.Dock = DockStyle.Bottom; Controls.Add(list); Controls.Add(copy);
+        var reset = Ui.Button("기본값으로 복원", () =>
+        {
+            try
+            {
+                updating = true; fonts.ResetDefaults();
+                foreach (var item in inputs) item.Value.Value = (decimal)fonts.Size(item.Key);
+                copy.Text = "전체 설정 복사";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { copy.Text = "설정 저장 실패 · 다시 시도해주세요"; }
+            finally { updating = false; }
+        }, name: "ResetTypography");
+        var actions = Ui.Row(reset, copy); actions.Dock = DockStyle.Bottom; Controls.Add(list); Controls.Add(actions);
     }
 }
