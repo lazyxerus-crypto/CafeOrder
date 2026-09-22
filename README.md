@@ -1,8 +1,8 @@
-# CafeOrder · WinForms UI 7차 + SQLite + XLSX
+# CafeOrder · WinForms UI 7차 + SQLite + XLSX + MegaCoffee 로그인
 
-.NET 10 / WinForms / x64. 상품 조회·로그인·주문·결제는 샘플 동작이며 자동으로 실제 판매처에 접속하지 않는다. 상품 링크 메뉴와 홈페이지가 설정된 판매처 아이콘만 Windows 기본 브라우저에 URL을 전달한다.
+.NET 10 / WinForms / x64. MegaCoffee 로그인·세션 확인에만 설치된 Microsoft Edge를 사용한다. 상품 조회·주문·결제는 샘플 동작이다. 상품 링크 메뉴와 홈페이지가 설정된 판매처 아이콘은 Windows 기본 브라우저에 URL을 전달한다.
 
-## 실행
+## 개발 실행
 
 `Run-CafeOrder.cmd`를 더블클릭한다. 작업 폴더의 로컬 SDK/패키지 캐시 또는 PATH의 .NET 10 SDK를 사용한다.
 
@@ -11,13 +11,24 @@ dotnet build CafeOrder.slnx -c Release -p:Platform=x64
 dotnet run --project src/CafeOrder -c Release -p:Platform=x64
 ```
 
+## win-x64 독립 실행형 배포
+
+프로젝트 루트에서 배포 전용 프로필로 publish한다. 결과 폴더 전체를 함께 배포하고 `CafeOrder.exe`를 직접 실행한다. .NET Desktop Runtime 별도 설치는 필요하지 않지만, MegaCoffee 로그인에는 Microsoft Edge가 설치되어 있어야 한다.
+
+```powershell
+dotnet publish src/CafeOrder/CafeOrder.csproj -c Release -p:Platform=x64 -p:PublishProfile=WinX64SelfContained -o dist/CafeOrder-win-x64
+.\dist\CafeOrder-win-x64\CafeOrder.exe
+```
+
+개발용 `dotnet build`/`Run-CafeOrder.cmd`는 기존 방식 그대로 사용한다. 배포 폴더에는 런타임·Playwright 드라이버·SQLite/XLSX 종속 파일이 포함된다. 실제 DB, 수동 이미지, `ui-state.json`, Edge 로그인 프로필/세션은 `%LOCALAPPDATA%\CafeOrder`에 남아 배포 폴더 교체 후에도 유지된다. `dist/`는 Git에 포함하지 않는다.
+
 ## 7차 UI 기준
 
 - 열 개수 변경 시 카드 전체를 즉시 다시 그려 축소 후 남는 이전 이미지/글자를 제거한다. 기존 카드를 재사용한다.
 - 상단 왼쪽은 카테고리/판매처·검색, 오른쪽은 관리 버튼 4개·격자 버튼 3개다. 본문과 같은 66:34 경계/간격을 사용한다.
 - 현재 카테고리 하나만 체크한다. 한 줄 영역은 말줄임/원문 Tooltip, 상품명은 최대 3줄, 주문기록 상품명은 전체 자동 높이를 유지한다.
 - 모든 판매처 아이콘은 공통 홈페이지 설정을 사용한다. `SellerLinks.cs`의 `Homepages`는 확정 주소 미제공으로 모두 미설정이다. 네이버 상품은 정확한 상품 URL에서 식별되는 스토어 홈만 연결한다. 아이콘 클릭은 장바구니 추가와 분리한다.
-- 기존 Draft/목록 갱신/이미지/복사/로컬 설정 동작을 유지하며 실제 사이트 조회·로그인·주문은 구현하지 않는다.
+- 기존 Draft/목록 갱신/이미지/복사/로컬 설정 동작을 유지한다. 실제 사이트 상품 조회·주문은 구현하지 않는다.
 
 ## 로컬 상태
 
