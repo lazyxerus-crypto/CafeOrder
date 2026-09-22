@@ -4,6 +4,9 @@ public record Supplier(string Id, string Name, bool Manual, decimal FreeShipping
 public record Product(int Id, string Name, decimal Price, string PriceNote,
     Supplier Supplier, string Category, bool Available, int SampleOrderCount)
 {
+    public string Name { get; set; } = Name;
+    public decimal Price { get; set; } = Price;
+    public Supplier Supplier { get; set; } = Supplier;
     public bool Available { get; set; } = Available;
     public string Category { get; set; } = Category;
     public bool IsActive { get; set; } = true;
@@ -156,7 +159,55 @@ public sealed class SampleData
         Products.Add(product);
         return product; // The same draft control adopts this record without refreshing or sorting the catalog.
     }
-    public ProductTransferRow[] ExportRows() => Products.Select(p => new ProductTransferRow(p.Id, p.Supplier.Name, p.Name, p.Price, p.PriceNote, p.Category, p.Url, p.IsActive)).ToArray();
+    private IProductWorkbook Workbook() => new ClosedXmlProductWorkbook(Suppliers, Categories);
+    public ProductTransferRow[] ExportRows() => Store.Database.ReadProducts(Suppliers)
+        .Select(p => new ProductTransferRow(p.Id, p.Supplier.Name, p.Name, p.Price, p.PriceText, p.Category, p.Url, p.IsActive)).ToArray();
+    internal int ExportWorkbook(string path)
+    { var rows = ExportRows(); Workbook().Export(path, rows); return rows.Length; }
+    internal ProductImportPlan PrepareImport(string path)
+    {
+        var read = Workbook().Import(path); var issues = read.Issues.ToList(); var changes = new List<ProductImportChange>();
+        var known = Products.ToDictionary(p => p.Id); var stored = Store.Database.ReadProducts(Suppliers).Select(p => p.Id).ToHashSet();
+        var seen = new HashSet<int>();
+        foreach (var row in read.Rows)
+        {
+            var seller = Suppliers.Single(p => p.Name == row.Supplier || string.Equals(p.Id, row.Supplier, StringComparison.OrdinalIgnoreCase));
+            Product? existing = null;
+            if (row.ProductId is int id)
+            {
+                if (!seen.Add(id)) { issues.Add(new(row.SheetRow, "ProductId", "파일에서 중복된 상품 ID입니다.")); continue; }
+                if (!known.TryGetValue(id, out existing)) { issues.Add(new(row.SheetRow, "ProductId", "존재하지 않는 상품 ID입니다.")); continue; }
+            }
+            string? display = string.IsNullOrWhiteSpace(row.DisplayPrice) ? null : row.DisplayPrice;
+            Product proposed = existing == null
+                ? new Product(0, row.Name, row.Price, "", seller, row.Category, true, 0)
+                    { DisplayPrice = display, Url = row.ProductUrl, IsActive = row.IsActive, DataOrigin = "UserMock" }
+                : existing with { Name = row.Name, Price = row.Price, DisplayPrice = display, Supplier = seller,
+                    Category = row.Category, Url = row.ProductUrl, IsActive = row.IsActive };
+            if (existing != null && existing.Name == proposed.Name && existing.Price == proposed.Price &&
+                existing.PriceText == proposed.PriceText && existing.Supplier.Id == proposed.Supplier.Id &&
+                existing.Category == proposed.Category && existing.Url == proposed.Url && existing.IsActive == proposed.IsActive)
+                continue;
+            changes.Add(new(existing, proposed, existing != null && stored.Contains(existing.Id), row.SheetRow));
+        }
+        return new(changes, issues);
+    }
+    internal void ApplyImport(ProductImportPlan plan)
+    {
+        if (plan.Applied || plan.Issues.Count != 0) throw new InvalidDataException("검증되지 않았거나 이미 반영한 파일입니다.");
+        var written = Store.Database.ApplyImport(plan.Changes);
+        plan.Applied = true;
+        for (int index = 0; index < written.Count; index++)
+        {
+            var existing = plan.Changes[index].Existing; var product = written[index];
+            if (existing == null) { Products.Add(product); continue; }
+            existing.Name = product.Name; existing.Price = product.Price; existing.DisplayPrice = product.DisplayPrice;
+            existing.Supplier = product.Supplier; existing.Category = product.Category; existing.Url = product.Url;
+            existing.IsActive = product.IsActive; ProductChanged?.Invoke(existing);
+        }
+        CatalogChanged?.Invoke();
+        if (plan.Changes.Any(change => change.Existing != null && Cart.Any(line => line.Product.Id == change.Existing.Id))) Notify();
+    }
 
     public decimal Subtotal(IEnumerable<CartLine> lines) => lines.Sum(x => x.Product.Price * x.Quantity);
     public decimal Shortfall(Supplier supplier, IEnumerable<CartLine> lines)

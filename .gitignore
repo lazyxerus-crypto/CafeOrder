@@ -23,6 +23,7 @@ Data/
 *.sqlite-*
 *.sqlite3
 *.sqlite3-*
+*.xlsx
 *.bak
 backup/
 backups/

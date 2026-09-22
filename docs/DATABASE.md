@@ -33,6 +33,12 @@ ID/PW가 필요하면 Windows 보안 저장소를 사용한다. SQLite/settings.
 
 ## 남은 목업 상태
 
-`ui-state.json`은 창/열/글자 크기를 계속 저장한다. `catalog-state.json`은 이전 자료로만 읽고 새로 쓰지 않는다. 주문기록·배송/주문 진행·로그인/자격정보·사이트 자동화·XLSX 연결은 이 단계에서 저장/구현하지 않는다.
+`ui-state.json`은 창/열/글자 크기를 계속 저장한다. `catalog-state.json`은 이전 자료로만 읽고 새로 쓰지 않는다. 주문기록·배송/주문 진행·로그인/자격정보·사이트 자동화는 이 단계에서 저장/구현하지 않는다.
 
-기존 `manual-images/{ProductId}.webp`는 원본대로 두고, 새 수동 이미지는 고유 파일명 WebP(중심 정사각 Crop/Quality 80)로 저장한다. DB에는 파일 경로만 보관한다. XLSX는 향후 IProductWorkbook 대량편집 입출력만 맡으며 실행 DB로 사용하지 않는다.
+기존 `manual-images/{ProductId}.webp`는 원본대로 두고, 새 수동 이미지는 고유 파일명 WebP(중심 정사각 Crop/Quality 80)로 저장한다. DB에는 파일 경로만 보관한다.
+
+## XLSX 상품 입출력
+
+상품 탭의 기존 버튼은 SQLite `Products`에 저장된 상품만 `ProductId`, `Supplier`, `Name`, `Price`, `DisplayPrice`, `Category`, `ProductUrl`, `IsActive` 순서로 내보낸다. 삭제 상품은 `IsActive=false`로 포함하고, 미저장 샘플·Draft·장바구니·수동 이미지/내부 경로는 제외한다. 라이브러리는 ClosedXML이다.
+
+가져오기는 전체 행의 값·판매처·카테고리·URL·ID 중복/존재 여부를 먼저 검증한다. 빈 ID는 새 ID를 발급하고 기존 ID는 그대로 수정한다. 파일에 없는 상품은 삭제하지 않는다. 사용자 확인 후 `Data/backups`에 SQLite 백업을 만들고 모든 변경을 한 트랜잭션으로 반영한다. 실패 시 전체 롤백하며, 기존 상품의 수동 이미지 경로와 XLSX에 없는 내부 값은 유지한다. XLSX는 실행 DB가 아니다.

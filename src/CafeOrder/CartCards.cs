@@ -40,12 +40,20 @@ internal sealed class CartProductRow : BufferedPanel
         foreach (Control child in Controls) child.FontChanged += (_, _) => { PerformLayout(); Parent?.PerformLayout(); };
         RefreshQuantity(); ResumeLayout(false);
     }
-    public void RefreshQuantity()
+    public bool RefreshQuantity()
     {
+        bool details = false;
+        if (title.Text != Line.Product.Name) { title.Text = Line.Product.Name; details = true; }
+        string currentPrice = $"{Line.Product.Price:N0}원";
+        if (price.Text != currentPrice) { price.Text = currentPrice; details = true; }
+        Image currentImage = SampleImages.Catalog(Line.Product.Category);
+        if (!ReferenceEquals(image.Image, currentImage)) { image.Image = currentImage; details = true; }
         if (quantity.Text != Line.Quantity.ToString()) quantity.Text = Line.Quantity.ToString();
         bool editable = !data.IsLocked(Line.Product);
         remove.Enabled = editable; if (minus != null) minus.Enabled = editable; if (plus != null) plus.Enabled = editable;
         if (order != null) order.Enabled = editable;
+        if (details) PerformLayout();
+        return details;
     }
     public void Highlight(bool active)
     { BackColor = title.BackColor = price.BackColor = active ? Color.FromArgb(221, 238, 225) : Color.White; }
@@ -130,7 +138,7 @@ internal sealed class SupplierCartCard : SoftPanel
                 row = new CartProductRow(data, line); rows[line.Product.Id] = row; Controls.Add(row);
                 foreach (Control child in row.Controls) child.FontChanged += (_, _) => InvalidateMeasure();
             }
-            row.RefreshQuantity();
+            if (row.RefreshQuantity()) measureVersion++;
         }
         if (!supplier.Manual)
         {

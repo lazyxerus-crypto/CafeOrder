@@ -32,6 +32,7 @@ internal static partial class Program
                 return 0;
             }
             CheckDatabase();
+            CheckXlsx();
             if (args.Contains("--repro-six")) { Run(ReproSix); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             if (args.Contains("--repro-seven")) { Run(ReproSeven); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             SeedUiFixture();
@@ -39,16 +40,17 @@ internal static partial class Program
             Run(CheckRestart);
             var store = new LocalState(statePath); Require(store.Preferences.Window?.Maximized == true, "Closing a maximized window saves its state"); store.Preferences.Window = new(-30000, -30000, 10, 10, true); store.SavePreferences();
             Run(CheckOffscreen);
+            Run(CheckXlsxUi, CheckDirectory("xlsx-ui"));
         }
         catch (Exception ex) { failure = ex; }
         finally { if (clipboard != null) Clipboard.SetDataObject(clipboard, true); else Clipboard.Clear(); }
-        string result = failure?.ToString() ?? "PASS: revision 7 column repaint, two-column toolbar, category check, ellipsis/original tooltips, seller homepage routing; revision 6 regressions: toolbar/grid buttons, single-line prices, cart visibility/order/reuse, unified draft/product menu, local refresh/in-place registration, sold-out/tooltip, stable scroll widths, X borders, typography reset/persistence, x64.";
+        string result = failure?.ToString() ?? "PASS: XLSX export/import validation, backup and transaction rollback; SQLite persistence and revision 7 UI regressions, x64.";
         File.WriteAllText(Path.Combine(output, "result.txt"), result); File.WriteAllLines(Path.Combine(output, "performance.txt"), results);
         Console.WriteLine(result); return failure == null ? 0 : 1;
     }
-    private static void Run(Func<MainForm, Task> check)
+    private static void Run(Func<MainForm, Task> check, string? directory = null)
     {
-        Exception? failure = null; var watch = Stopwatch.StartNew(); using var main = new MainForm(statePath); watch.Stop();
+        Exception? failure = null; var watch = Stopwatch.StartNew(); using var main = new MainForm(directory ?? statePath); watch.Stop();
         results.Add($"Main construction: {watch.Elapsed.TotalMilliseconds:F2}ms");
         main.Shown += async (_, _) => { try { await check(main); } catch (Exception ex) { failure = ex; } finally { main.Close(); } };
         Application.Run(main); if (failure != null) throw failure;
@@ -93,8 +95,13 @@ internal static partial class Program
         Require(!All(main).Any(c => c.Name.Contains("Toast")), "Removed notification space/controls");
         var search = Find<TextBox>(main, "Search"); var filters = Find<TableLayoutPanel>(main, "Filters"); var productRegion = Find<Panel>(main, "ProductRegion");
         Require(productRegion.Top - filters.Bottom <= 8, "Catalog starts immediately below search toolbar");
-        Find<Button>(main, "ExportProducts").PerformClick(); Require(Find<Label>(main, "TransferStatus").Text.Contains("다음 단계"), "XLSX boundary is honestly unavailable without adapter");
-        Find<Label>(main, "TransferStatus").Visible = false; Find<Label>(main, "TransferStatus").Text = "";
+        var dialogs = new CheckTransferDialogs { ExportPath = Path.Combine(statePath, "ui-products.xlsx") };
+        All(main).OfType<ProductsView>().Single().TransferDialogs = dialogs;
+        Find<Button>(main, "ExportProducts").PerformClick();
+        Require(File.Exists(dialogs.ExportPath) && dialogs.Messages.Last().Contains("내보냈습니다"), "Existing export button creates an XLSX file");
+        dialogs.ImportPath = dialogs.ExportPath;
+        Find<Button>(main, "ImportProducts").PerformClick();
+        Require(dialogs.Preview is { Issues.Count: 0 } && dialogs.Messages.Last().Contains("가져오기 완료"), "Existing import button validates and confirms XLSX");
         var card = Find<ProductCard>(grid, "Product_1"); search.Text = "포모나";
         Require(!All(card).OfType<TextBox>().Any() && !All(card).OfType<Button>().Any(b => b.Text.Contains("장바구니")), "No copy textboxes or add button in normal cards");
         int qty = data.Cart.Single(l => l.Product.Id == 1).Quantity;

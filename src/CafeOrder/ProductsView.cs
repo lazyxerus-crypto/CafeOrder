@@ -17,6 +17,8 @@ public sealed class ProductsView : UserControl
     private readonly Label emptyCart = Ui.Text("장바구니가 비었습니다.");
     private readonly Button orderAll;
     private readonly List<GridViewButton> columnButtons = [];
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal IProductTransferDialogs TransferDialogs { get; set; } = new WinFormsProductTransferDialogs();
 
     public ProductsView(SampleData data)
     {
@@ -32,8 +34,7 @@ public sealed class ProductsView : UserControl
         for (int i = 0; i < filterControls.Length; i++) filters.Controls.Add(filterControls[i], i, 0);
         for (int i = 0; i < 2; i++) filters.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var feedback = Ui.Text(""); feedback.Name = "TransferStatus"; feedback.Visible = false;
-        void Transfer(string action) { feedback.Text = $"xlsx {action}는 다음 단계에서 사용할 수 있습니다."; feedback.Visible = true; }
-        var actions = Ui.Row(Ui.Button("새로고침", () => FilterProducts(), name: "RefreshProducts"), Ui.Button("상품 추가", AddDraft, name: "AddProduct"), Ui.Button("내보내기", () => Transfer("내보내기"), name: "ExportProducts"), Ui.Button("가져오기", () => Transfer("가져오기"), name: "ImportProducts"));
+        var actions = Ui.Row(Ui.Button("새로고침", () => FilterProducts(), name: "RefreshProducts"), Ui.Button("상품 추가", AddDraft, name: "AddProduct"), Ui.Button("내보내기", ExportProducts, name: "ExportProducts"), Ui.Button("가져오기", ImportProducts, name: "ImportProducts"));
         var management = new TableLayoutPanel { Name = "Management", Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 3, Padding = new Padding(6) };
         management.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         for (int row = 0; row < 3; row++) management.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -119,7 +120,37 @@ public sealed class ProductsView : UserControl
         drafts.Insert(0, draft); products.Controls.Add(draft); products.Prepend(draft); products.AutoScrollPosition = Point.Empty;
         draft.Controls.OfType<TextBox>().Single().Focus();
     }
-    private void CatalogChanged() => FilterProducts();
+    private void CatalogChanged()
+    {
+        foreach (var product in data.Products.Where(p => p.IsActive && !productCards.ContainsKey(p.Id)))
+        { var card = new ProductCard(product, data); productCards.Add(product.Id, card); products.Controls.Add(card); }
+        FilterProducts();
+    }
+    private void ExportProducts()
+    {
+        var dialogs = TransferDialogs; IWin32Window owner = (IWin32Window?)FindForm() ?? this;
+        string? path = dialogs.ChooseExport(owner); if (path == null) return;
+        try { int count = data.ExportWorkbook(path); dialogs.Show(owner, $"상품 {count}개를 내보냈습니다.", false); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { dialogs.Show(owner, "내보내기 실패: " + ex.Message, true); }
+    }
+    private void ImportProducts()
+    {
+        var dialogs = TransferDialogs; IWin32Window owner = (IWin32Window?)FindForm() ?? this;
+        string? path = dialogs.ChooseImport(owner); if (path == null) return;
+        try
+        {
+            var plan = data.PrepareImport(path);
+            if (plan.Issues.Count != 0)
+            {
+                dialogs.ShowIssues(owner, plan.Issues);
+                return;
+            }
+            if (!dialogs.Confirm(owner, plan)) return;
+            data.ApplyImport(plan);
+            dialogs.Show(owner, $"가져오기 완료 · 추가 {plan.Added}개, 수정 {plan.Updated}개, 비활성 변경 {plan.Deactivated}개", false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { dialogs.Show(owner, "가져오기 실패 · DB 반영을 완료하지 않았습니다.\n" + ex.Message, true); }
+    }
     private void ProductChanged(Product _) => UpdateCount();
     private void UpdateCount() => count.Text = $"상품 {products.Items.Count(c => c.Product is { IsActive: true })}개";
     private void FilterProducts(bool resetScroll = true)

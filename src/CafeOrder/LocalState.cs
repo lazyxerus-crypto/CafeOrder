@@ -53,10 +53,16 @@ public sealed class LocalState
     internal string NewManualImagePath(int id) => Path.Combine(DirectoryPath, "manual-images", $"{id}-{Guid.NewGuid():N}.webp");
 }
 
-// The future SQLite repository / XLSX adapter boundary; XLSX is never a live store.
-public record ProductTransferRow(int ProductId, string Supplier, string ProductName, decimal Price, string PriceNote, string Category, string ProductUrl, bool IsActive);
+// XLSX is an interchange format; SQLite remains the live store.
+public record ProductTransferRow(int? ProductId, string Supplier, string Name, decimal Price,
+    string DisplayPrice, string Category, string ProductUrl, bool IsActive, int SheetRow = 0);
+public record ProductWorkbookIssue(int Row, string Column, string Reason)
+{
+    public override string ToString() => $"{Row}행 · {Column}: {Reason}";
+}
+public record ProductWorkbookRead(IReadOnlyList<ProductTransferRow> Rows, IReadOnlyList<ProductWorkbookIssue> Issues);
 public interface IProductWorkbook
 {
     void Export(string xlsxPath, IReadOnlyList<ProductTransferRow> products);
-    IReadOnlyList<ProductTransferRow> Import(string xlsxPath);
+    ProductWorkbookRead Import(string xlsxPath);
 }

@@ -127,6 +127,33 @@ internal sealed class CatalogDatabase
         int id = checked((int)Number(db, tx, "SELECT MAX(24,COALESCE(MAX(ProductId),0))+1 FROM Products"));
         var product = template with { Id = id, DataOrigin = "UserMock" }; Save(db, tx, product); return product;
     });
+    internal IReadOnlyList<Product> ApplyImport(IReadOnlyList<ProductImportChange> changes)
+    {
+        if (changes.Count == 0) return [];
+        return Access(db =>
+        {
+            Backup(db, "before-xlsx-import");
+            using var tx = db.BeginTransaction();
+            long next = Number(db, tx, "SELECT MAX(24,COALESCE(MAX(ProductId),0))+1 FROM Products");
+            var written = new List<Product>(changes.Count);
+            foreach (var change in changes)
+            {
+                Product product = change.Proposed;
+                if (change.Existing is { } existing)
+                {
+                    using var query = Command(db, tx, "SELECT COUNT(*) FROM Products WHERE ProductId=$id", ("$id", existing.Id));
+                    bool present = Convert.ToInt64(query.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
+                    if (present != change.WasStored)
+                        throw new InvalidDataException($"{change.SheetRow}행 · ProductId: 확인 이후 DB가 변경됐습니다. 파일을 다시 가져오세요.");
+                }
+                else product = product with { Id = checked((int)next++) };
+                try { Save(db, tx, product); }
+                catch (SqliteException ex) { throw new InvalidDataException($"{change.SheetRow}행 · ProductId: DB 저장 실패 · {ex.Message}", ex); }
+                written.Add(product);
+            }
+            tx.Commit(); return written;
+        });
+    }
     internal List<Product> ReadProducts(IReadOnlyList<Supplier> suppliers) => Access(db =>
     {
         var result = new List<Product>(); using var command = Command(db, null, "SELECT * FROM Products ORDER BY ProductId"); using var reader = command.ExecuteReader();
