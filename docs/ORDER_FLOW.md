@@ -1,4 +1,4 @@
-# 주문과 로그인 기준 (구현 전)
+# 주문과 로그인 기준
 
 ## 로컬 장바구니와 카드
 
@@ -36,9 +36,9 @@
 
 ## AUTO 로그인 유지
 
-공급처별 Playwright persistent browser profile을 사용할 수 있도록 설계한다. 쿠키/세션/localStorage 등 로그인 상태는 사용자 PC에 로컬 저장할 수 있다. 자격정보/백업/로그 보안은 DATABASE를 따른다.
+AUTO 판매처 5곳에 서로 다른 `%LOCALAPPDATA%\CafeOrder\BrowserProfiles\{판매처ID}` 경로를 할당한다. 현재 실제 접속·로그인 판별은 MegaCoffee 1곳만 연결했다. 설치된 Edge의 Playwright persistent context를 사용하며, 재시작 시 사라지는 세션 쿠키는 같은 폴더에 Windows CurrentUser DPAPI로 암호화해 보완한다. localStorage는 브라우저 프로필에 남는다. ID/PW는 판매처관리 입력 후 전송에만 쓰고 저장·출력하지 않는다. 향후 Windows 자격정보 저장소 연결 지점은 `ILoginCredentialSource`다.
 
-앱 시작 시 화면과 로컬 상품/장바구니를 먼저 보여주고 AUTO 로그인 확인은 공급처별 백그라운드에서 진행한다. 무거운 브라우저 작업의 동시 실행은 기본 1~2개 수준을 고려한다. OTP, QR, CAPTCHA, 추가 본인인증은 우회하지 않으며 브라우저를 사용자에게 보여주고 WAITING_FOR_USER로 전환한다.
+앱 시작 시 화면과 로컬 상품/장바구니를 먼저 보여주고 MegaCoffee 세션 확인은 백그라운드에서 실행한다. 로그인 필요 시 버튼으로 Edge를 열고, 인증 화면이나 수동 로그인이 필요하면 `WAITING_FOR_USER` 상태로 브라우저를 유지한다. OTP·QR·CAPTCHA·추가 본인인증은 우회하지 않는다. 다른 4곳은 프로필 경로만 분리했으며 실제 로그인 판별/접속은 후속 검증 전까지 실행하지 않는다.
 
 ## 무료배송 설정
 

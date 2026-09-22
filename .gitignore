@@ -36,6 +36,7 @@ diagnostics/
 
 # Browser profiles, cookies, sessions and cache
 browser-profiles/
+BrowserProfiles/
 profiles/
 playwright-profiles/
 ms-playwright/
@@ -46,6 +47,7 @@ test-results/
 *session*
 *storageState*
 *storage-state*
+*.dpapi
 cache/
 .cache/
 

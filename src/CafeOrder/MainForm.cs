@@ -4,10 +4,15 @@ public partial class MainForm : Form
 {
     private readonly SampleData sample;
     private readonly Typography typography;
+    private readonly SupplierSessionManager sessions;
+    private readonly bool checkLoginOnShown;
+    private bool sessionsClosed;
     private TypographyForm? typographyWindow;
     public MainForm() : this(null) { }
     public MainForm(string? stateDirectory)
     {
+        sessions = new SupplierSessionManager(stateDirectory == null ? null : Path.Combine(stateDirectory, "browser-profiles"));
+        checkLoginOnShown = stateDirectory == null;
         sample = new SampleData(new LocalState(stateDirectory));
         typography = new Typography(sample.Store); Ui.Fonts = typography;
         InitializeComponent(); Ui.Role(this, TypographyKey.General); Ui.Role(tabs, TypographyKey.Tab);
@@ -15,7 +20,7 @@ public partial class MainForm : Form
         var products = new ProductsView(sample);
         tabs.TabPages[0].Controls.Add(products);
         tabs.TabPages[1].Controls.Add(OtherPages.History(sample));
-        tabs.TabPages[2].Controls.Add(OtherPages.Suppliers(sample));
+        tabs.TabPages[2].Controls.Add(OtherPages.Suppliers(sample, sessions, this));
         tabs.TabPages[3].Controls.Add(OtherPages.Logs(sample));
         tabs.TabPages[4].Controls.Add(OtherPages.Settings(sample, OpenTypography));
         typography.Changed += () =>
@@ -34,7 +39,7 @@ public partial class MainForm : Form
         if (typographyWindow is { IsDisposed: false }) { typographyWindow.Activate(); return; }
         typographyWindow = new TypographyForm(typography); typographyWindow.Show(this);
     }
-    protected override void OnFormClosing(FormClosingEventArgs e)
+    protected override async void OnFormClosing(FormClosingEventArgs e)
     {
         base.OnFormClosing(e); if (e.Cancel) return;
         Rectangle bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
@@ -42,6 +47,10 @@ public partial class MainForm : Form
         try { sample.Store.SavePreferences(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { e.Cancel = MessageBox.Show(this, "창 설정을 저장하지 못했습니다. 저장하지 않고 닫을까요?", "설정 저장", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes; }
+        if (e.Cancel || sessionsClosed) return;
+        e.Cancel = true;
+        try { await sessions.DisposeAsync(); }
+        finally { sessionsClosed = true; if (!IsDisposed) BeginInvoke(Close); }
     }
     protected override void OnFormClosed(FormClosedEventArgs e)
     { typographyWindow?.Close(); base.OnFormClosed(e); }
@@ -59,6 +68,11 @@ public partial class MainForm : Form
             if (saved.Maximized) WindowState = FormWindowState.Maximized;
         }
         else FitWorkingArea();
+    }
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        if (checkLoginOnShown) sessions.StartBackgroundChecks();
     }
     protected override void OnDpiChanged(DpiChangedEventArgs e) { base.OnDpiChanged(e); FitWorkingArea(); }
     private void FitWorkingArea()

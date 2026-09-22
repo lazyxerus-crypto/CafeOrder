@@ -15,6 +15,37 @@ internal static partial class Program
     private static int Main(string[] args)
     {
         output = Path.GetFullPath(args.Length == 0 ? "artifacts/ui-checks" : args[0]); Directory.CreateDirectory(output);
+        if (args.Contains("--mega-ui-current"))
+        {
+            try { LoginChecks.CurrentMegaUiStatus(); return 0; }
+            catch (Exception ex) { Console.WriteLine("UI session check stopped: " + ex.GetType().Name); return 1; }
+        }
+        if (args.Contains("--mega-current"))
+        {
+            try { LoginChecks.CurrentMegaSessionAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("Session check stopped: " + ex.GetType().Name); return 1; }
+        }
+        if (args.Contains("--mega-click-diagnostic"))
+        {
+            try { LoginChecks.DiagnoseOneManualClickAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("Diagnostic stopped: " + ex.GetType().Name); return 1; }
+        }
+        if (args.Contains("--login-check") || args.Contains("--mega-live") || args.Contains("--mega-interactive") || args.Contains("--mega-diagnose"))
+        {
+            try
+            {
+                if (args.Contains("--mega-diagnose")) LoginChecks.DiagnosePageAsync(output).GetAwaiter().GetResult();
+                else if (args.Contains("--mega-interactive")) LoginChecks.InteractiveAsync().GetAwaiter().GetResult();
+                else if (args.Contains("--mega-live")) LoginChecks.LiveAsync(output).GetAwaiter().GetResult();
+                else LoginChecks.RunAsync(output).GetAwaiter().GetResult();
+                File.WriteAllText(Path.Combine(output, "result.txt"), "PASS: Edge login/session checks"); return 0;
+            }
+            catch (Exception ex)
+            {
+                string loginFailure = "Login check failed: " + ex.GetType().Name;
+                Console.WriteLine(loginFailure); File.WriteAllText(Path.Combine(output, "result.txt"), loginFailure); return 1;
+            }
+        }
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         Exception? failure = null;
         var clipboard = Clipboard.GetDataObject();

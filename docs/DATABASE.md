@@ -33,7 +33,7 @@ ID/PW가 필요하면 Windows 보안 저장소를 사용한다. SQLite/settings.
 
 ## 남은 목업 상태
 
-`ui-state.json`은 창/열/글자 크기를 계속 저장한다. `catalog-state.json`은 이전 자료로만 읽고 새로 쓰지 않는다. 주문기록·배송/주문 진행·로그인/자격정보·사이트 자동화는 이 단계에서 저장/구현하지 않는다.
+`ui-state.json`은 창/열/글자 크기를 계속 저장한다. `catalog-state.json`은 이전 자료로만 읽고 새로 쓰지 않는다. 주문기록·배송/주문 진행·자격정보 저장·상품/주문 사이트 자동화는 구현하지 않는다. MegaCoffee 로그인 세션만 별도 브라우저 프로필에 저장하며 SQLite에는 넣지 않는다.
 
 기존 `manual-images/{ProductId}.webp`는 원본대로 두고, 새 수동 이미지는 고유 파일명 WebP(중심 정사각 Crop/Quality 80)로 저장한다. DB에는 파일 경로만 보관한다.
 

@@ -25,7 +25,7 @@ internal static class OtherPages
             list.Controls.Add(Ui.Column(header, Ui.Role(Ui.Text($"주문일시  {time}\n주문번호  {number}"), TypographyKey.HistoryInfo), table, payment));
         }
     }
-    public static Control Suppliers(SampleData data)
+    public static Control Suppliers(SampleData data, SupplierSessionManager sessions, Control uiDispatcher)
     {
         var list = Ui.List("Suppliers"); list.SuspendLayout();
         foreach (var s in data.Suppliers)
@@ -42,9 +42,38 @@ internal static class OtherPages
                 var linked = new CheckBox { Name = $"NaverLogin_{s.Id}", Text = "네이버 연동 로그인", AutoSize = true, Margin = new Padding(8) };
                 linked.CheckedChanged += (_, _) => { id.Enabled = password.Enabled = !linked.Checked; }; first.Controls.Add(linked);
             }
-            string state = s.Id switch { "mega" => "로그인 완료", "piece" => "로그인 실패", _ => "확인 전" };
-            var status = Ui.Text("로그인 상태: " + state); status.ForeColor = state == "로그인 완료" ? Ui.Accent : state == "로그인 실패" ? Ui.Danger : Ui.Ink;
-            var login = Ui.Button(state == "로그인 완료" ? "다시 로그인" : "로그인", () => status.Text = "로그인 연결 준비 중", name: $"Login_{s.Id}");
+            var status = Ui.Text("로그인 상태: 확인 전"); status.Name = $"LoginStatus_{s.Id}";
+            var login = Ui.Button("로그인", () =>
+            {
+                if (s.Manual || !sessions.IsConfigured(s.Id)) { status.Text = "로그인 상태: 연결 준비 중"; return; }
+                var entered = id.Text.Length > 0 && password.Text.Length > 0 ? new LoginCredentials(id.Text, password.Text) : null;
+                password.Clear();
+                _ = sessions.OpenLoginAsync(s.Id, entered);
+            }, name: $"Login_{s.Id}");
+            void ShowLoginState(string supplierId, SupplierLoginState state)
+            {
+                if (supplierId != s.Id || status.IsDisposed) return;
+                if (uiDispatcher.InvokeRequired)
+                {
+                    try { uiDispatcher.BeginInvoke(() => ShowLoginState(supplierId, state)); }
+                    catch (InvalidOperationException) { }
+                    return;
+                }
+                status.Text = "로그인 상태: " + (state switch
+                {
+                    SupplierLoginState.Checking => "확인 중",
+                    SupplierLoginState.LoginRequired => "로그인 필요",
+                    SupplierLoginState.LoggedIn => "로그인 완료",
+                    SupplierLoginState.WaitingForUser => "사용자 확인 대기",
+                    SupplierLoginState.Error => "확인 실패",
+                    SupplierLoginState.NotConfigured => "연결 준비 중",
+                    _ => "확인 전"
+                });
+                status.ForeColor = state == SupplierLoginState.LoggedIn ? Ui.Accent
+                    : state == SupplierLoginState.Error ? Ui.Danger : Ui.Ink;
+                login.Text = state == SupplierLoginState.LoggedIn ? "다시 로그인" : "로그인";
+            }
+            sessions.StateChanged += ShowLoginState;
             var second = Ui.Row(status, login);
             if (!s.Manual)
             {
@@ -53,6 +82,7 @@ internal static class OtherPages
                 second.Controls.AddRange([Ui.Text("    무료배송 기준"), threshold, Ui.Text("원")]);
             }
             var card = new SupplierSettingsCard(first, second);
+            card.Disposed += (_, _) => sessions.StateChanged -= ShowLoginState;
             caps.VisibleChanged += (_, _) => { if (card.Visible) card.Remeasure(); };
             list.Controls.Add(card);
         }
