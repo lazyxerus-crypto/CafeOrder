@@ -20,8 +20,21 @@ internal static partial class Program
         var clipboard = Clipboard.GetDataObject();
         try
         {
+            if (args.Contains("--migrate-user"))
+            {
+                var current = new SampleData(new LocalState());
+                using var db = current.Store.Database.Connect();
+                Require(SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 2, "User DB migration version");
+                using var integrity = db.CreateCommand(); integrity.CommandText = "PRAGMA integrity_check";
+                Require((string?)integrity.ExecuteScalar() == "ok", "User DB integrity");
+                long saved = SqlNumber(db, "SELECT COUNT(*) FROM Products");
+                Console.WriteLine($"MIGRATED: {current.Products.Count} visible records, {saved} stored product records, {current.Cart.Count} cart lines; {current.Store.Database.Path}");
+                return 0;
+            }
+            CheckDatabase();
             if (args.Contains("--repro-six")) { Run(ReproSix); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             if (args.Contains("--repro-seven")) { Run(ReproSeven); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
+            SeedUiFixture();
             Run(Check);
             Run(CheckRestart);
             var store = new LocalState(statePath); Require(store.Preferences.Window?.Maximized == true, "Closing a maximized window saves its state"); store.Preferences.Window = new(-30000, -30000, 10, 10, true); store.SavePreferences();
@@ -39,6 +52,11 @@ internal static partial class Program
         results.Add($"Main construction: {watch.Elapsed.TotalMilliseconds:F2}ms");
         main.Shown += async (_, _) => { try { await check(main); } catch (Exception ex) { failure = ex; } finally { main.Close(); } };
         Application.Run(main); if (failure != null) throw failure;
+    }
+    private static void SeedUiFixture()
+    {
+        var data = new SampleData(new LocalState(statePath));
+        foreach (int id in new[] { 1, 1, 7, 21, 22, 6, 10, 9 }) data.AddToCart(data.Products.Single(p => p.Id == id));
     }
     private static IEnumerable<Control> All(Control root) { foreach (Control c in root.Controls) { yield return c; foreach (var child in All(c)) yield return child; } }
     private static T Find<T>(Control root, string name) where T : Control => All(root).OfType<T>().Single(c => c.Name == name);
@@ -75,7 +93,7 @@ internal static partial class Program
         Require(!All(main).Any(c => c.Name.Contains("Toast")), "Removed notification space/controls");
         var search = Find<TextBox>(main, "Search"); var filters = Find<TableLayoutPanel>(main, "Filters"); var productRegion = Find<Panel>(main, "ProductRegion");
         Require(productRegion.Top - filters.Bottom <= 8, "Catalog starts immediately below search toolbar");
-        Find<Button>(main, "ExportProducts").PerformClick(); Require(Find<Label>(main, "TransferStatus").Text.Contains("저장소 연결 후"), "XLSX boundary is honestly unavailable without adapter");
+        Find<Button>(main, "ExportProducts").PerformClick(); Require(Find<Label>(main, "TransferStatus").Text.Contains("다음 단계"), "XLSX boundary is honestly unavailable without adapter");
         Find<Label>(main, "TransferStatus").Visible = false; Find<Label>(main, "TransferStatus").Text = "";
         var card = Find<ProductCard>(grid, "Product_1"); search.Text = "포모나";
         Require(!All(card).OfType<TextBox>().Any() && !All(card).OfType<Button>().Any(b => b.Text.Contains("장바구니")), "No copy textboxes or add button in normal cards");
@@ -154,7 +172,7 @@ internal static partial class Program
         var point = card.PointToScreen(card.ImageBounds.Location + new Size(5, 5)); var drop = new DragEventArgs(new DataObject(DataFormats.FileDrop, new[] { source }), 0, point.X, point.Y, DragDropEffects.Copy, DragDropEffects.None);
         typeof(ProductCard).GetMethod("OnDragEnter", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(card, [drop]);
         typeof(ProductCard).GetMethod("OnDragDrop", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(card, [drop]);
-        string manual = data.Store.ManualImagePath(1); Require(File.Exists(manual), "Drop writes manual WebP");
+        string manual = card.Product!.ManualImagePath!; Require(File.Exists(manual), "Drop writes manual WebP");
         Require(System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(manual), 8, 4) == "WEBP", "Real WebP output");
         using (var cropped = (Bitmap)ManualImages.Load(manual)) Require(cropped.Width == 100 && cropped.Height == 100 && cropped.GetPixel(3, 3).B > 200 && cropped.GetPixel(3, 3).R < 30, "Center square crop retains middle rather than stretching");
         Capture(card, "03-manual-image");
@@ -182,7 +200,7 @@ internal static partial class Program
         Require(draft.Visible && registrationOrder.SequenceEqual(grid.Items) && draft.Bounds == registrationBounds && grid.AutoScrollPosition == registrationScroll, $"URL position: visible={draft.Visible} order={registrationOrder.SequenceEqual(grid.Items)} bounds={registrationBounds} -> {draft.Bounds} scroll={registrationScroll} -> {grid.AutoScrollPosition}");
         main.Size = previousSize;
         Require(!draft.IsDraft && draft.Product!.Category == "티백" && grid.Controls.Contains(draft) && data.Products.Count == count + 1, "Mock URL success converts same card and persists category"); registeredId = draft.Product!.Id;
-        Require(data.Store.LoadProducts().Any(p => p.Id == registeredId && p.Url == draft.Product.Url), "Registered sample is saved");
+        Require(data.Store.Database.ReadProducts(data.Suppliers).Any(p => p.Id == registeredId && p.Url == draft.Product.Url), "Registered sample is saved");
         Find<Button>(main, "RefreshProducts").PerformClick(); Require(!draft.Visible && drafts[1].Visible, "Explicit refresh applies filters to registered card while retaining unfinished draft");
         category.SelectedIndex = 0; supplier.SelectedIndex = 0; search.Clear();
         Find<Button>(main, "AddProduct").PerformClick();

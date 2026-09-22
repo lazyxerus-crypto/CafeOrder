@@ -32,7 +32,7 @@ public sealed class ProductsView : UserControl
         for (int i = 0; i < filterControls.Length; i++) filters.Controls.Add(filterControls[i], i, 0);
         for (int i = 0; i < 2; i++) filters.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var feedback = Ui.Text(""); feedback.Name = "TransferStatus"; feedback.Visible = false;
-        void Transfer(string action) { feedback.Text = $"xlsx {action}는 저장소 연결 후 사용할 수 있습니다."; feedback.Visible = true; }
+        void Transfer(string action) { feedback.Text = $"xlsx {action}는 다음 단계에서 사용할 수 있습니다."; feedback.Visible = true; }
         var actions = Ui.Row(Ui.Button("새로고침", () => FilterProducts(), name: "RefreshProducts"), Ui.Button("상품 추가", AddDraft, name: "AddProduct"), Ui.Button("내보내기", () => Transfer("내보내기"), name: "ExportProducts"), Ui.Button("가져오기", () => Transfer("가져오기"), name: "ImportProducts"));
         var management = new TableLayoutPanel { Name = "Management", Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 3, Padding = new Padding(6) };
         management.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));

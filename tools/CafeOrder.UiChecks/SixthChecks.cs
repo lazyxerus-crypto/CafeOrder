@@ -93,7 +93,13 @@ internal static partial class Program
         }
         int singleCartWidth = cart.Controls[0].Width; data.AddToCart(data.Products.Single(p => p.Id == 10)); Pump();
         Require(Find<Control>(cart, "Cart_mega").Width == singleCartWidth, "Cart width unchanged as scrollbar appears");
-        foreach (var line in data.Cart.ToArray()) data.Remove(line); data.Cart.AddRange(oldCart); data.Notify();
+        foreach (var line in data.Cart.ToArray()) data.Remove(line);
+        foreach (var saved in oldCart.Reverse())
+        {
+            data.AddToCart(saved.Product);
+            if (!saved.Product.Supplier.Manual)
+                for (int n = 1; n < saved.Quantity; n++) data.ChangeQuantity(data.Cart.Single(l => l.Product.Id == saved.Product.Id), 1);
+        }
         await Task.Delay(240);
     }
     private static void CheckX(CartProductRow row)

@@ -13,6 +13,10 @@ TestResults/
 AppData/
 local-data/
 userdata/
+catalog-state.json
+ui-state.json
+manual-images/
+Data/
 *.db
 *.db-*
 *.sqlite

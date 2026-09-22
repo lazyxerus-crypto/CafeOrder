@@ -9,7 +9,12 @@ public record Product(int Id, string Name, decimal Price, string PriceNote,
     public bool IsActive { get; set; } = true;
     // Non-routable sample URLs. Only an explicit product-link command invokes the default browser.
     public string Url { get; set; } = $"https://example.invalid/product/{Id}";
-    public string PriceText => $"{Price:N0}원{(PriceNote.Length == 0 ? "" : $" ({PriceNote})")}";
+    public string? DisplayPrice { get; set; }
+    public string? ImageUrl { get; set; }
+    public string? ImageCachePath { get; set; }
+    public string? ManualImagePath { get; set; }
+    public string DataOrigin { get; set; } = "Sample";
+    public string PriceText => DisplayPrice ?? $"{Price:N0}원{(PriceNote.Length == 0 ? "" : $" ({PriceNote})")}";
 }
 
 public sealed class CartLine(Product product, int quantity)
@@ -43,7 +48,9 @@ public sealed class SampleData
     public void Recheck(Product product)
     {
         if (product.Supplier.Manual) return;
+        bool previous = product.Available;
         product.Available = product.Id == 12; // Cream restocks; mango remains unavailable in the mock.
+        try { Store.Database.SaveProduct(product); } catch { product.Available = previous; throw; }
         ProductChanged?.Invoke(product);
     }
 
@@ -75,18 +82,14 @@ public sealed class SampleData
         Add("비건 초콜릿 쿠키 24개입", 36000, 4, "디저트/스낵");
         Add("매장용 행주 10장", 2900, 5, "기타");
         Add("프리미엄 디저트 모음 60개", 158000, 1, "디저트/스낵");
-        Cart.AddRange(new[] { new CartLine(Products[0], 2), new CartLine(Products[6], 1),
-            new CartLine(Products[20], 1), new CartLine(Products[21], 1),
-            new CartLine(Products[5], 0), new CartLine(Products[9], 0), new CartLine(Products[8], 0) });
-        foreach (var saved in Store.LoadProducts())
+        Store.Database.Initialize(Store, Suppliers, Products);
+        foreach (var saved in Store.Database.ReadProducts(Suppliers))
         {
-            var seller = Suppliers.FirstOrDefault(s => s.Id == saved.SupplierId);
-            if (seller == null || saved.Id <= 0 || !Categories.Skip(1).Contains(saved.Category)) continue;
-            var product = Products.FirstOrDefault(p => p.Id == saved.Id);
-            if (product == null) { product = new(saved.Id, saved.Name, saved.Price, saved.PriceNote, seller, saved.Category, saved.Available, 0); Products.Add(product); }
-            product.Category = saved.Category; product.IsActive = saved.IsActive; product.Url = saved.Url;
+            int index = Products.FindIndex(p => p.Id == saved.Id);
+            if (index < 0) Products.Add(saved);
+            else Products[index] = saved with { SampleOrderCount = Products[index].SampleOrderCount };
         }
-        Cart.RemoveAll(line => !line.Product.IsActive);
+        Cart.AddRange(Store.Database.ReadCart(Products));
     }
 
     private void Add(string name, decimal price, int supplier, string category, string note = "", bool available = true)
@@ -95,9 +98,10 @@ public sealed class SampleData
     public void AddToCart(Product p)
     {
         if (!p.IsActive || !p.Available || IsLocked(p)) return;
+        int quantity = Store.Database.AddToCart(p);
         var line = Cart.Find(x => x.Product.Id == p.Id);
-        if (line == null) line = new(p, p.Supplier.Manual ? 0 : 1);
-        else if (!p.Supplier.Manual) line.Quantity++;
+        if (line == null) line = new(p, quantity);
+        else line.Quantity = quantity;
         Cart.Remove(line); Cart.Insert(0, line);
         Notify();
         ProductAdded?.Invoke(p);
@@ -105,41 +109,51 @@ public sealed class SampleData
     public void ChangeQuantity(CartLine line, int change)
     {
         if (line.Product.Supplier.Manual || IsLocked(line.Product) || !Cart.Contains(line)) return;
-        line.Quantity = Math.Max(0, line.Quantity + change);
-        if (line.Quantity == 0) { Remove(line); return; }
+        int quantity = Math.Max(0, checked(line.Quantity + change));
+        Store.Database.SetQuantity(line.Product.Id, quantity);
+        line.Quantity = quantity;
+        if (quantity == 0) Cart.Remove(line);
         Notify();
     }
     public void Remove(CartLine line)
     {
-        if (IsLocked(line.Product) || !Cart.Remove(line)) return;
+        if (IsLocked(line.Product) || !Cart.Contains(line)) return;
+        Store.Database.RemoveCart([line.Product.Id]); Cart.Remove(line);
         Notify();
     }
     public void Complete(IEnumerable<CartLine> lines)
     {
-        foreach (var line in lines.ToArray()) Cart.Remove(line);
+        var selected = lines.ToArray();
+        Store.Database.RemoveCart(selected.Select(line => line.Product.Id));
+        foreach (var line in selected) Cart.Remove(line);
         Notify();
     }
     public void Notify() => CartChanged?.Invoke();
     public void SetActive(Product product, bool active)
     {
         bool previous = product.IsActive; product.IsActive = active;
-        try { Store.SaveProducts(Products); } catch { product.IsActive = previous; throw; }
+        try { Store.Database.SaveProduct(product); } catch { product.IsActive = previous; throw; }
         ProductChanged?.Invoke(product);
     }
     public void SetCategory(Product product, string category)
     {
         if (!Categories.Skip(1).Contains(category)) return;
         string previous = product.Category; product.Category = category;
-        try { Store.SaveProducts(Products); } catch { product.Category = previous; throw; }
+        try { Store.Database.SaveProduct(product); } catch { product.Category = previous; throw; }
         ProductChanged?.Invoke(product); CatalogChanged?.Invoke();
+    }
+    public void SetManualImage(Product product, string? path)
+    {
+        string? previous = product.ManualImagePath; product.ManualImagePath = path;
+        try { Store.Database.SaveProduct(product); } catch { product.ManualImagePath = previous; throw; }
     }
     public Product RegisterMock(string url, string category)
     {
         var seller = DetectSupplier(url) ?? throw new ArgumentException("지원하지 않는 상품 링크입니다");
         var source = Products.First(p => p.Supplier.Id == seller.Id);
-        var product = new Product(Products.Max(p => p.Id) + 1, source.Name, source.Price, source.PriceNote, seller, category, true, 0) { Url = url.Trim() };
+        var product = Store.Database.InsertProduct(new Product(0, source.Name, source.Price, source.PriceNote, seller, category, true, 0)
+        { Url = url.Trim(), DisplayPrice = source.PriceText });
         Products.Add(product);
-        try { Store.SaveProducts(Products); } catch { Products.Remove(product); throw; }
         return product; // The same draft control adopts this record without refreshing or sorting the catalog.
     }
     public ProductTransferRow[] ExportRows() => Products.Select(p => new ProductTransferRow(p.Id, p.Supplier.Name, p.Name, p.Price, p.PriceNote, p.Category, p.Url, p.IsActive)).ToArray();

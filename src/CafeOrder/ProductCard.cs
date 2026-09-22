@@ -163,9 +163,9 @@ public sealed class ProductCard : Panel
             if (!product.Available && !product.Supplier.Manual && !checking)
             {
                 checking = true; Invalidate(); Update();
-                BeginInvoke(() => { if (IsDisposed) return; data.Recheck(product); checking = false; Invalidate(); });
+                BeginInvoke(() => { if (IsDisposed) return; Run(() => data.Recheck(product)); checking = false; Invalidate(); });
             }
-            else if (product.Available && !data.IsLocked(product)) { data.AddToCart(product); flashing = true; highlight.Stop(); highlight.Start(); }
+            else if (product.Available && !data.IsLocked(product)) Run(() => { data.AddToCart(product); flashing = true; highlight.Stop(); highlight.Start(); });
         }
         ArmHint(e.Location); Invalidate();
     }
@@ -201,18 +201,24 @@ public sealed class ProductCard : Panel
     private void LoadManual()
     {
         manual?.Dispose(); manual = null;
-        string path = data.Store.ManualImagePath(Product!.Id);
-        if (File.Exists(path)) Run(() => manual = ManualImages.Load(path));
+        string? path = Product!.ManualImagePath;
+        if (path != null && File.Exists(path)) Run(() => manual = ManualImages.Load(path));
     }
     internal void SetManual(string source)
     {
         if (Product is not { IsActive: true }) return;
-        ManualImages.Save(source, data.Store.ManualImagePath(Product.Id)); LoadManual(); Invalidate();
+        string path = data.Store.NewManualImagePath(Product.Id);
+        try { ManualImages.Save(source, path); data.SetManualImage(Product, path); }
+        catch { if (File.Exists(path)) File.Delete(path); throw; }
+        LoadManual(); Invalidate();
     }
     internal void RemoveManual()
     {
         if (Product == null) return;
-        File.Delete(data.Store.ManualImagePath(Product.Id)); manual?.Dispose(); manual = null; Invalidate();
+        string? previous = Product.ManualImagePath;
+        data.SetManualImage(Product, null);
+        manual?.Dispose(); manual = null; Invalidate();
+        if (previous != null && File.Exists(previous)) File.Delete(previous);
     }
     protected override void OnDragEnter(DragEventArgs e) { base.OnDragEnter(e); dragging = true; pressed = false; UpdateDrop(e); }
     protected override void OnDragOver(DragEventArgs e) { base.OnDragOver(e); UpdateDrop(e); }

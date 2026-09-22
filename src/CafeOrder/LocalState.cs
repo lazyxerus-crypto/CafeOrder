@@ -11,14 +11,19 @@ public sealed class UiPreferences
 public record WindowPlacement(int X, int Y, int Width, int Height, bool Maximized);
 public record StoredProduct(int Id, string SupplierId, string Name, decimal Price, string PriceNote, string Category, string Url, bool IsActive, bool Available);
 
-// Temporary mock storage. No credentials, cart, order history or browser state belong here.
+// UI preferences and read-only legacy catalog live here; SQLite owns current catalog/cart data.
 public sealed class LocalState
 {
     public string DirectoryPath { get; }
+    internal CatalogDatabase Database { get; }
     public UiPreferences Preferences { get; }
     public LocalState(string? directory = null)
     {
         DirectoryPath = directory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeOrder", "Mockup");
+        string dataDirectory = directory == null
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeOrder", "Data")
+            : Path.Combine(directory, "Data");
+        Database = new CatalogDatabase(Path.Combine(dataDirectory, "CafeOrder.db"));
         Preferences = Read<UiPreferences>("ui-state.json") ?? new();
         Preferences.Columns = Math.Clamp(Preferences.Columns, 3, 5);
         Preferences.FontSizes ??= [];
@@ -36,10 +41,16 @@ public sealed class LocalState
         File.Move(pending, path, true);
     }
     public void SavePreferences() => Write("ui-state.json", Preferences);
-    public List<StoredProduct> LoadProducts() => Read<List<StoredProduct>>("catalog-state.json") ?? [];
-    public void SaveProducts(IEnumerable<Product> products) => Write("catalog-state.json", products.Select(p =>
-        new StoredProduct(p.Id, p.Supplier.Id, p.Name, p.Price, p.PriceNote, p.Category, p.Url, p.IsActive, p.Available)).ToArray());
-    public string ManualImagePath(int id) => Path.Combine(DirectoryPath, "manual-images", id + ".webp");
+    internal List<StoredProduct> ReadLegacyProducts()
+    {
+        string path = Path.Combine(DirectoryPath, "catalog-state.json");
+        if (!File.Exists(path)) return [];
+        try { return JsonSerializer.Deserialize<List<StoredProduct>>(File.ReadAllText(path))
+            ?? throw new InvalidDataException("기존 상품 파일을 읽을 수 없습니다."); }
+        catch (JsonException ex) { throw new InvalidDataException("기존 상품 파일을 읽을 수 없습니다.", ex); }
+    }
+    internal string LegacyManualImagePath(int id) => Path.Combine(DirectoryPath, "manual-images", id + ".webp");
+    internal string NewManualImagePath(int id) => Path.Combine(DirectoryPath, "manual-images", $"{id}-{Guid.NewGuid():N}.webp");
 }
 
 // The future SQLite repository / XLSX adapter boundary; XLSX is never a live store.

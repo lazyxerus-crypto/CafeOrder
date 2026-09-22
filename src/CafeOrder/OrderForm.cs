@@ -143,7 +143,12 @@ public sealed class OrderForm : Form
             BeginInvoke(() =>
             {
                 if (closing || IsDisposed) return;
-                if (card.State == "COMPLETED") data.Complete(card.Lines);
+                if (card.State == "COMPLETED")
+                {
+                    try { data.Complete(card.Lines); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    { card.State = "FAILED"; batch = false; data.Unlock(card.Lines); busy = false; UpdateActions(); return; }
+                }
                 busy = false; UpdateActions(); if (batch) BeginInvoke(Advance);
             });
         });

@@ -32,7 +32,13 @@ internal static class Ui
             BackColor = primary ? Accent : Color.White, ForeColor = primary ? Color.White : Ink,
             Cursor = Cursors.Hand, UseMnemonic = false };
         b.FlatAppearance.BorderColor = Color.FromArgb(201, 211, 205);
-        b.Click += (_, _) => action();
+        b.Click += (_, _) =>
+        {
+            try { action(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { MessageBox.Show(b.FindForm(), "로컬 데이터를 저장하지 못했습니다. 변경 사항은 적용되지 않았습니다.\n\n" + ex.Message,
+                "CafeOrder · 저장소 오류", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        };
         Role(b, TypographyKey.Button); b.FontChanged += (_, _) => { if (!b.AutoSize) b.Height = ActionHeight(b); };
         return b;
     }
