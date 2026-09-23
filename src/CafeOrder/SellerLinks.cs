@@ -6,7 +6,7 @@ internal static class SellerLinks
 {
     // Only user-confirmed homepages belong here; product detail URLs remain on Product.
     internal static readonly Dictionary<string, string?> Homepages = new()
-    { ["mega"] = null, ["piece"] = "https://www.piececake.co.kr/", ["food"] = null, ["wym"] = null, ["nuldam"] = null, ["coupang"] = null, ["naver"] = null };
+    { ["mega"] = null, ["piece"] = "https://www.piececake.co.kr/", ["food"] = null, ["wym"] = null, ["nuldam"] = "https://nuldampartners.com/", ["coupang"] = null, ["naver"] = null };
     internal static Action<ProcessStartInfo> Launch = info => Process.Start(info);
     internal static string? Valid(string? value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "https" or "http" && uri.UserInfo.Length == 0 ? uri.AbsoluteUri : null;
     internal static string? Home(Supplier supplier) => Valid(Homepages.GetValueOrDefault(supplier.Id));

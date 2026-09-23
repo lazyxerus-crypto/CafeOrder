@@ -57,8 +57,9 @@ internal static partial class Program
         {
             SellerLinks.Launch = launches.Add;
             Require(SellerLinks.Homepages["piece"] == "https://www.piececake.co.kr/" &&
-                SellerLinks.Homepages.Where(pair => pair.Key != "piece").All(pair => pair.Value == null),
-                "Only user-provided PieceCake homepage is configured");
+                SellerLinks.Homepages["nuldam"] == "https://nuldampartners.com/" &&
+                SellerLinks.Homepages.Where(pair => pair.Key is not ("piece" or "nuldam")).All(pair => pair.Value == null),
+                "Only user-provided PieceCake and Nuldam homepages are configured");
             Mouse(sample, MouseButtons.Left, new Point(20, 20)); Require(launches.Count == 0, "Unset homepage does nothing");
             Require(sample.TooltipAt(new Point(20, 20)).Contains("홈페이지 미설정"), "Unset homepage tooltip");
             SellerLinks.Homepages["mega"] = "https://home.example.invalid/"; // Test-only fixture; never launches a browser.
@@ -79,7 +80,7 @@ internal static partial class Program
                 {
                     int before = launches.Count;
                     typeof(SellerIcon).GetMethod("OnMouseUp", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(icon, [new MouseEventArgs(MouseButtons.Left, 1, 10, 10, 0)]);
-                    Require(launches.Count == before + (icon.Name is "SellerIcon_mega" or "SellerIcon_piece" ? 1 : 0), "Shared header icon obeys per-seller configuration");
+                    Require(launches.Count == before + (icon.Name is "SellerIcon_mega" or "SellerIcon_piece" or "SellerIcon_nuldam" ? 1 : 0), "Shared header icon obeys per-seller configuration");
                 }
             }
             tabs.SelectedIndex = 0;
@@ -88,7 +89,7 @@ internal static partial class Program
             {
                 int before = launches.Count;
                 typeof(SellerIcon).GetMethod("OnMouseUp", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(icon, [new MouseEventArgs(MouseButtons.Left, 1, 10, 10, 0)]);
-                Require(launches.Count == before + (icon.Name is "SellerIcon_mega" or "SellerIcon_piece" ? 1 : 0), "Order icon uses shared configuration");
+                Require(launches.Count == before + (icon.Name is "SellerIcon_mega" or "SellerIcon_piece" or "SellerIcon_nuldam" ? 1 : 0), "Order icon uses shared configuration");
             }
             dialog.Close();
             Require(snapshot.SequenceEqual(data.Cart.Select(l => (l.Product.Id, l.Quantity))) && order.SequenceEqual(grid.Items) && scroll == grid.AutoScrollPosition, "Homepage clicks preserve quantity/order/scroll");

@@ -19,6 +19,10 @@ public sealed partial class SampleData
         Func<string, Task<MegaProductLookupResult>> lookup)
         => RefreshFirstSiteCartAsync(product, addedLine, lookup);
 
+    internal Task RefreshFirstNuldamCartAsync(Product product, CartLine addedLine,
+        Func<string, Task<MegaProductLookupResult>> lookup)
+        => RefreshFirstSiteCartAsync(product, addedLine, lookup);
+
     private async Task RefreshFirstSiteCartAsync(Product product, CartLine addedLine,
         Func<string, Task<MegaProductLookupResult>> lookup)
     {

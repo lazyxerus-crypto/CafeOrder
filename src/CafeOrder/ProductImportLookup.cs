@@ -12,6 +12,8 @@ internal static class ProductUrlIdentity
             return "mega|" + (goodsNo.TrimStart('0') is { Length: > 0 } normalized ? normalized : "0");
         if (supplierId == "piece" && PieceCakeProductLookup.TryProductUrl(url, out _, out var productNumber))
             return "piece|" + productNumber;
+        if (supplierId == "nuldam" && NuldamProductLookup.TryProductUrl(url, out _, out var nuldamNumber))
+            return "nuldam|" + nuldamNumber;
         return Uri.TryCreate(url, UriKind.Absolute, out var uri)
             ? supplierId + "|" + uri.AbsoluteUri : supplierId + "|" + url.Trim();
     }
@@ -27,7 +29,8 @@ public sealed partial class SampleData
 
     internal async Task<ProductImportPlan> PrepareImportAsync(string path,
         Func<string, Task<MegaProductLookupResult>> lookup, IProgress<string>? progress,
-        CancellationToken cancellationToken, Func<string, Task<MegaProductLookupResult>>? pieceLookup = null)
+        CancellationToken cancellationToken, Func<string, Task<MegaProductLookupResult>>? pieceLookup = null,
+        Func<string, Task<MegaProductLookupResult>>? nuldamLookup = null)
     {
         var selection = SelectImportRows(await Task.Run(() => Workbook().Import(path), cancellationToken), true);
         var read = selection.Read;
@@ -50,14 +53,20 @@ public sealed partial class SampleData
                 MegaProductLookupResult result;
                 bool isMega = MegaCoffeeProductLookup.TryProductUrl(row.ProductUrl, out var megaUrl, out _);
                 bool isPiece = PieceCakeProductLookup.TryProductUrl(row.ProductUrl, out var pieceUrl, out _);
-                string supplierId = isMega ? "mega" : "piece";
-                var selectedLookup = isMega ? lookup : pieceLookup;
-                var cleanUrl = isMega ? megaUrl : pieceUrl;
+                bool isNuldam = NuldamProductLookup.TryProductUrl(row.ProductUrl, out var nuldamUrl, out _);
+                string supplierId = isMega ? "mega" : isPiece ? "piece" : isNuldam ? "nuldam" : "";
+                var selectedLookup = isMega ? lookup : isPiece ? pieceLookup : nuldamLookup;
+                var cleanUrl = isMega ? megaUrl : isPiece ? pieceUrl : isNuldam ? nuldamUrl : null;
+                if (cleanUrl == null)
+                {
+                    issues.Add(new(row.SheetRow, "ProductUrl", "이 판매처의 URL 조회는 아직 지원하지 않습니다."));
+                    continue;
+                }
                 try
                 {
                     result = selectedLookup == null
-                        ? new(MegaProductLookupStatus.Failed, Reason: "파미유 상품 조회를 사용할 수 없습니다.")
-                        : await selectedLookup(cleanUrl!.ToString()).WaitAsync(cancellationToken);
+                        ? new(MegaProductLookupStatus.Failed, Reason: "해당 판매처 상품 조회를 사용할 수 없습니다.")
+                        : await selectedLookup(cleanUrl.ToString()).WaitAsync(cancellationToken);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
@@ -70,8 +79,8 @@ public sealed partial class SampleData
                 {
                     string reason = result.Status switch
                     {
-                        MegaProductLookupStatus.LoginRequired => (isMega ? "메가커피" : "파미유") + " 로그인이 필요합니다.",
-                        MegaProductLookupStatus.InvalidUrl => (isMega ? "메가커피" : "파미유") + " 상품 URL이 올바르지 않습니다.",
+                        MegaProductLookupStatus.LoginRequired => (isMega ? "메가커피" : isPiece ? "파미유" : "늘담") + " 로그인이 필요합니다.",
+                        MegaProductLookupStatus.InvalidUrl => (isMega ? "메가커피" : isPiece ? "파미유" : "늘담") + " 상품 URL이 올바르지 않습니다.",
                         _ => result.Reason ?? "상품 조회에 실패했습니다. 상품명·가격·이미지·품절 상태를 확인해주세요."
                     };
                     issues.Add(new(row.SheetRow, "ProductUrl", reason));
@@ -152,7 +161,8 @@ public sealed partial class SampleData
                     string.Equals(supplier.Id, row.Supplier, StringComparison.OrdinalIgnoreCase)).Id;
             bool megaUrl = MegaCoffeeProductLookup.TryProductUrl(row.ProductUrl, out _, out _);
             bool pieceUrl = PieceCakeProductLookup.TryProductUrl(row.ProductUrl, out _, out _);
-            string supplierId = megaUrl ? "mega" : pieceUrl ? "piece" : declaredSupplierId;
+            bool nuldamUrl = NuldamProductLookup.TryProductUrl(row.ProductUrl, out _, out _);
+            string supplierId = megaUrl ? "mega" : pieceUrl ? "piece" : nuldamUrl ? "nuldam" : declaredSupplierId;
             string? key = ProductUrlIdentity.Key(supplierId, row.ProductUrl);
             Product[] owners = key == null ? [] : stored.Where(product => string.Equals(
                 ProductUrlIdentity.Key(product.Supplier.Id, product.Url), key, StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -168,7 +178,7 @@ public sealed partial class SampleData
                 continue;
             }
             if (!row.LookupRequested && (megaUrl && declaredSupplierId != "mega" ||
-                pieceUrl && declaredSupplierId != "piece") &&
+                pieceUrl && declaredSupplierId != "piece" || nuldamUrl && declaredSupplierId != "nuldam") &&
                 (row.ProductId == null || ownerId == row.ProductId))
             {
                 issues.Add(new(row.SheetRow, "Supplier", "상품 URL과 판매처가 일치하지 않습니다."));
@@ -180,22 +190,24 @@ public sealed partial class SampleData
                 StringComparison.OrdinalIgnoreCase))
             {
                 // A different goodsNo is a new product, never a replacement for the old ProductId.
-                if (!megaUrl && !pieceUrl)
+                if (!megaUrl && !pieceUrl && !nuldamUrl)
                 {
-                    issues.Add(new(row.SheetRow, "ProductUrl", "새 상품 URL은 메가커피·파미유 실제 조회만 지원합니다."));
+                    issues.Add(new(row.SheetRow, "ProductUrl", "새 상품 URL은 메가커피·파미유·늘담 실제 조회만 지원합니다."));
                     continue;
                 }
                 selected = row with { ProductId = null, LookupRequested = true };
-                supplierId = megaUrl ? "mega" : "piece";
+                supplierId = megaUrl ? "mega" : pieceUrl ? "piece" : "nuldam";
             }
             if (selected.LookupRequested && !allowLookup)
             { issues.Add(new(row.SheetRow, "ProductUrl", "이 행은 로그인된 상품조회가 필요합니다.")); continue; }
-            if (selected.LookupRequested && !megaUrl && !pieceUrl)
+            if (selected.LookupRequested && !megaUrl && !pieceUrl && !nuldamUrl)
             {
                 string reason = MegaCoffeeProductLookup.IsMegaHost(row.ProductUrl)
                     ? "메가커피 상품 URL 형식이 올바르지 않습니다."
                     : PieceCakeProductLookup.IsPieceHost(row.ProductUrl)
                     ? "파미유 상품 URL 형식이 올바르지 않습니다."
+                    : NuldamProductLookup.IsNuldamHost(row.ProductUrl)
+                    ? "늘담 상품 URL 형식이 올바르지 않습니다."
                     : "이 판매처의 URL 조회는 아직 지원하지 않습니다.";
                 issues.Add(new(row.SheetRow, "ProductUrl", reason)); continue;
             }
@@ -297,7 +309,7 @@ public sealed partial class SampleData
         if (name.Contains("스트로우", StringComparison.Ordinal) || name.Contains("빨대", StringComparison.Ordinal) ||
             name.Contains("아이스컵", StringComparison.Ordinal) || name.Contains("뚜껑", StringComparison.Ordinal)) matches.Add("일회용품");
         if (name.Contains("우유", StringComparison.Ordinal) || name.Contains("휘핑크림", StringComparison.Ordinal)) matches.Add("유제품");
-        if (new[] { "도넛", "치아바타", "크루아상", "소금빵", "쿠키", "케이크" }
+        if (new[] { "도넛", "치아바타", "크루아상", "소금빵", "쿠키", "케이크", "낭시에" }
             .Any(word => name.Contains(word, StringComparison.Ordinal))) matches.Add("디저트/스낵");
         return matches.Count == 1 ? matches.Single() : "기타";
     }

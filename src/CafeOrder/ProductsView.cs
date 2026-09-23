@@ -6,6 +6,7 @@ public sealed class ProductsView : UserControl
     private readonly SupplierSessionManager? sessions;
     internal Func<string, Task<MegaProductLookupResult>>? MegaLookup;
     internal Func<string, Task<MegaProductLookupResult>>? PieceLookup;
+    internal Func<string, Task<MegaProductLookupResult>>? NuldamLookup;
     private readonly ProductGrid products = new();
     private readonly FlowLayoutPanel cart = Ui.List("CartList");
     private readonly TextBox search = new() { Name = "Search", Dock = DockStyle.Fill, PlaceholderText = "상품명 검색", Margin = new Padding(4, 6, 8, 6) };
@@ -31,6 +32,7 @@ public sealed class ProductsView : UserControl
         this.data = data; this.sessions = sessions;
         MegaLookup = sessions == null ? null : sessions.LookupMegaProductAsync;
         PieceLookup = sessions == null ? null : sessions.LookupPieceProductAsync;
+        NuldamLookup = sessions == null ? null : sessions.LookupNuldamProductAsync;
         Dock = DockStyle.Fill; DoubleBuffered = true;
         supplier = Ui.Combo(new[] { "전체 판매처" }.Concat(data.Suppliers.Select(x => x.Name)), "SupplierFilter");
         var root = new TableLayoutPanel { Name = "ProductColumns", Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 2 };
@@ -113,19 +115,20 @@ public sealed class ProductsView : UserControl
         data.ProductAdded += BringSellerFirst;
         data.FirstMegaCartAdded += FirstMegaCartAdded;
         data.FirstPieceCartAdded += FirstPieceCartAdded;
+        data.FirstNuldamCartAdded += FirstNuldamCartAdded;
         data.CatalogChanged += CatalogChanged; data.ProductChanged += ProductChanged;
         emphasis.Tick += (_, _) => { emphasis.Stop(); if (highlighted is { IsDisposed: false }) highlighted.Highlight(false); highlighted = null; };
         ApplyColumns(); FilterProducts(); SyncCart();
     }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { data.CartChanged -= SyncCart; data.ProductAdded -= BringSellerFirst; data.FirstMegaCartAdded -= FirstMegaCartAdded; data.FirstPieceCartAdded -= FirstPieceCartAdded; data.CatalogChanged -= CatalogChanged; data.ProductChanged -= ProductChanged; emphasis.Dispose(); emptyCart.Dispose(); }
+        if (disposing) { data.CartChanged -= SyncCart; data.ProductAdded -= BringSellerFirst; data.FirstMegaCartAdded -= FirstMegaCartAdded; data.FirstPieceCartAdded -= FirstPieceCartAdded; data.FirstNuldamCartAdded -= FirstNuldamCartAdded; data.CatalogChanged -= CatalogChanged; data.ProductChanged -= ProductChanged; emphasis.Dispose(); emptyCart.Dispose(); }
         base.Dispose(disposing);
     }
     public void ApplyColumns() { products.Columns = data.Store.Preferences.Columns; foreach (var button in columnButtons) button.Selected = button.Columns == products.Columns; products.PerformLayout(); }
     private void AddDraft()
     {
-        var draft = new ProductCard(null, data, category.SelectedIndex > 0 ? category.Text : "기타", MegaLookup, PieceLookup);
+        var draft = new ProductCard(null, data, category.SelectedIndex > 0 ? category.Text : "기타", MegaLookup, PieceLookup, NuldamLookup);
         draft.Registered += () => { drafts.Remove(draft); productCards[draft.Product!.Id] = draft; UpdateCount(); };
         draft.DeleteDraft += () => { drafts.Remove(draft); products.RemoveItem(draft); draft.Dispose(); };
         drafts.Insert(0, draft); products.Controls.Add(draft); products.Prepend(draft); products.AutoScrollPosition = Point.Empty;
@@ -157,7 +160,7 @@ public sealed class ProductsView : UserControl
         {
             var lookup = MegaLookup ?? (_ => Task.FromResult(new MegaProductLookupResult(MegaProductLookupStatus.Failed)));
             using var plan = await data.PrepareImportAsync(path, lookup,
-                new Progress<string>(progress.SetStatus), cancellation.Token, PieceLookup);
+                new Progress<string>(progress.SetStatus), cancellation.Token, PieceLookup, NuldamLookup);
             if (IsDisposed || cancellation.IsCancellationRequested) return;
             if (plan.Issues.Count != 0)
             {
@@ -222,6 +225,10 @@ public sealed class ProductsView : UserControl
     private void FirstPieceCartAdded(Product product, CartLine line)
     {
         if (PieceLookup is { } lookup) _ = data.RefreshFirstPieceCartAsync(product, line, lookup);
+    }
+    private void FirstNuldamCartAdded(Product product, CartLine line)
+    {
+        if (NuldamLookup is { } lookup) _ = data.RefreshFirstNuldamCartAsync(product, line, lookup);
     }
     private void SyncCart()
     {

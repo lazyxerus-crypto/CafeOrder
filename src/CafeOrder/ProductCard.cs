@@ -7,6 +7,7 @@ public sealed class ProductCard : Panel
     private readonly SampleData data;
     private readonly Func<string, Task<MegaProductLookupResult>>? megaLookup;
     private readonly Func<string, Task<MegaProductLookupResult>>? pieceLookup;
+    private readonly Func<string, Task<MegaProductLookupResult>>? nuldamLookup;
     private string draftCategory;
     internal event Action? Registered;
     internal event Action? DeleteDraft;
@@ -59,8 +60,15 @@ public sealed class ProductCard : Panel
     internal ProductCard(Product? product, SampleData data, string draftCategory,
         Func<string, Task<MegaProductLookupResult>>? megaLookup,
         Func<string, Task<MegaProductLookupResult>>? pieceLookup)
+        : this(product, data, draftCategory, megaLookup, pieceLookup, null) { }
+
+    internal ProductCard(Product? product, SampleData data, string draftCategory,
+        Func<string, Task<MegaProductLookupResult>>? megaLookup,
+        Func<string, Task<MegaProductLookupResult>>? pieceLookup,
+        Func<string, Task<MegaProductLookupResult>>? nuldamLookup)
     {
         this.data = data; this.megaLookup = megaLookup; this.pieceLookup = pieceLookup;
+        this.nuldamLookup = nuldamLookup;
         Product = product; this.draftCategory = draftCategory;
         Name = product == null ? "Draft_" + Guid.NewGuid().ToString("N") : $"Product_{product.Id}";
         DoubleBuffered = true; ResizeRedraw = true; BackColor = Color.White; AllowDrop = true; Margin = Padding.Empty; TabStop = true;
@@ -97,6 +105,7 @@ public sealed class ProductCard : Panel
         if (url == null || string.IsNullOrWhiteSpace(url.Text)) return;
         if (MegaCoffeeProductLookup.IsMegaHost(url.Text)) { _ = RegisterMegaDraftAsync(); return; }
         if (PieceCakeProductLookup.IsPieceHost(url.Text)) { _ = RegisterSiteDraftAsync("piece"); return; }
+        if (NuldamProductLookup.IsNuldamHost(url.Text)) { _ = RegisterSiteDraftAsync("nuldam"); return; }
         void Register()
         {
             Product = data.RegisterMock(url.Text, draftCategory); Name = $"Product_{Product.Id}";
@@ -109,8 +118,8 @@ public sealed class ProductCard : Panel
     private async Task RegisterSiteDraftAsync(string supplierId)
     {
         if (url == null || !url.Enabled || string.IsNullOrWhiteSpace(url.Text)) return;
-        var lookup = supplierId == "mega" ? megaLookup : pieceLookup;
-        string supplierName = supplierId == "mega" ? "메가커피" : "파미유";
+        var lookup = supplierId switch { "mega" => megaLookup, "piece" => pieceLookup, _ => nuldamLookup };
+        string supplierName = supplierId switch { "mega" => "메가커피", "piece" => "파미유", _ => "늘담" };
         if (lookup == null) { feedback = supplierName + " 조회를 사용할 수 없습니다"; Invalidate(); return; }
         string requestedUrl = url.Text.Trim();
         url.Enabled = false; feedback = "조회 중"; Invalidate();

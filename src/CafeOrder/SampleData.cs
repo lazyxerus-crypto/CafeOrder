@@ -44,6 +44,7 @@ public sealed partial class SampleData
     public event Action<Product>? ProductAdded;
     internal event Action<Product, CartLine>? FirstMegaCartAdded;
     internal event Action<Product, CartLine>? FirstPieceCartAdded;
+    internal event Action<Product, CartLine>? FirstNuldamCartAdded;
     public event Action<Product>? ProductChanged;
     public event Action? CatalogChanged;
     public LocalState Store { get; }
@@ -129,13 +130,15 @@ public sealed partial class SampleData
         ProductAdded?.Invoke(p);
         if ((first || !IsMegaCartLookupPending(p)) &&
             (p.Supplier.Id == "mega" && MegaCoffeeProductLookup.TryProductUrl(p.Url, out _, out _) ||
-             p.Supplier.Id == "piece" && PieceCakeProductLookup.TryProductUrl(p.Url, out _, out _)) &&
+             p.Supplier.Id == "piece" && PieceCakeProductLookup.TryProductUrl(p.Url, out _, out _) ||
+             p.Supplier.Id == "nuldam" && NuldamProductLookup.TryProductUrl(p.Url, out _, out _)) &&
             (p.LastSuccessfulCheckAtUtc is not { } checkedAt ||
                 DateTimeOffset.UtcNow - checkedAt < TimeSpan.Zero ||
                 DateTimeOffset.UtcNow - checkedAt >= TimeSpan.FromHours(24)))
         {
             if (p.Supplier.Id == "mega") FirstMegaCartAdded?.Invoke(p, line);
-            else FirstPieceCartAdded?.Invoke(p, line);
+            else if (p.Supplier.Id == "piece") FirstPieceCartAdded?.Invoke(p, line);
+            else FirstNuldamCartAdded?.Invoke(p, line);
         }
     }
     public void ChangeQuantity(CartLine line, int change)
@@ -198,7 +201,8 @@ public sealed partial class SampleData
     }
     public Product RegisterMock(string url, string category)
     {
-        if (MegaCoffeeProductLookup.IsMegaHost(url) || PieceCakeProductLookup.IsPieceHost(url))
+        if (MegaCoffeeProductLookup.IsMegaHost(url) || PieceCakeProductLookup.IsPieceHost(url) ||
+            NuldamProductLookup.IsNuldamHost(url))
             throw new ArgumentException("실제 상품은 로그인된 페이지 조회 후 등록해야 합니다.");
         var seller = DetectSupplier(url) ?? throw new ArgumentException("지원하지 않는 상품 링크입니다");
         var source = Products.First(p => p.Supplier.Id == seller.Id);
@@ -219,7 +223,8 @@ public sealed partial class SampleData
             throw new ArgumentException("상품 분류 또는 이미지 파일이 올바르지 않습니다.");
         if (supplierId == "mega" && !MegaCoffeeProductLookup.TryProductUrl(snapshot.ProductUrl, out _, out _) ||
             supplierId == "piece" && !PieceCakeProductLookup.TryProductUrl(snapshot.ProductUrl, out _, out _) ||
-            supplierId is not ("mega" or "piece"))
+            supplierId == "nuldam" && !NuldamProductLookup.TryProductUrl(snapshot.ProductUrl, out _, out _) ||
+            supplierId is not ("mega" or "piece" or "nuldam"))
             throw new ArgumentException("상품 URL과 판매처가 일치하지 않습니다.");
         var seller = Suppliers.Single(s => s.Id == supplierId);
         var product = Store.Database.InsertProduct(new Product(0, snapshot.Name, snapshot.Price, "", seller, category, snapshot.Available, 0)

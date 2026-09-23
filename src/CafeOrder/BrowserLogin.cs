@@ -74,7 +74,8 @@ internal sealed partial class SupplierSessionManager : IAsyncDisposable
         this.credentials = credentials ?? new NoStoredLoginCredentials();
         this.probes = probes ?? new()
         {
-            ["mega"] = new MegaCoffeeLoginProbe(), ["piece"] = new PieceCakeLoginProbe()
+            ["mega"] = new MegaCoffeeLoginProbe(), ["piece"] = new PieceCakeLoginProbe(),
+            ["nuldam"] = new NuldamLoginProbe()
         };
         this.log = log;
     }

@@ -59,7 +59,7 @@ public sealed class OrderForm : Form
         {
             if (group.Key.Manual)
                 foreach (var url in group.GroupBy(x => x.Product.Url)) AddCard(group.Key, url.ToList(), "PENDING");
-            else AddCard(group.Key, group.ToList(), group.Key.Id == "nuldam" ? "UNKNOWN" : "PENDING");
+            else AddCard(group.Key, group.ToList(), group.Key.Id == "nuldam" && Sessions == null ? "NOT_CONFIGURED" : "PENDING");
         }
         data.CartChanged += Sync; Sync();
         if (startManual) Shown += (_, _) => { if (cards.FirstOrDefault() is { } card) StartOne(card); };
@@ -140,8 +140,8 @@ public sealed class OrderForm : Form
                 "PREPARING" => "사이트 장바구니 확인 중...", "WAITING_FOR_USER" => "사이트 장바구니 사용자 확인 필요",
                 "READY" => "✓ 사이트 장바구니 준비 완료 · 주문/결제 미실행", "COMPLETED" => "✓ 주문 완료",
                 "NOT_CONFIGURED" => "사이트 장바구니 연동 전",
-                "FAILED" when Sessions != null && card.Supplier.Id is "mega" or "piece" => "사이트 장바구니 준비 실패",
-                "UNKNOWN" when Sessions != null && card.Supplier.Id is "mega" or "piece" => "사이트 장바구니 상태 확인 필요",
+                "FAILED" when Sessions != null && card.Supplier.Id is "mega" or "piece" or "nuldam" => "사이트 장바구니 준비 실패",
+                "UNKNOWN" when Sessions != null && card.Supplier.Id is "mega" or "piece" or "nuldam" => "사이트 장바구니 상태 확인 필요",
                 "FAILED" => "주문실패 · 주문 내용을 확인해주세요.", "UNKNOWN" => "확인필요 · 주문 여부를 확인할 수 없습니다.",
                 _ when soldOut => "품절 상품 포함", _ when checking => "가격 확인 중", _ when failed => "가격 확인 필요", _ => "주문 대기"
             };
@@ -158,6 +158,7 @@ public sealed class OrderForm : Form
         busy = true; data.Lock(card.Lines);
         if (card.Supplier.Id == "mega" && Sessions != null) _ = RunMegaAsync(card);
         else if (card.Supplier.Id == "piece" && Sessions != null) _ = RunPieceAsync(card);
+        else if (card.Supplier.Id == "nuldam" && Sessions != null) _ = RunNuldamAsync(card);
         else RunCard(card);
     }
     private void StartAll()
@@ -175,6 +176,7 @@ public sealed class OrderForm : Form
         busy = true;
         if (card.Supplier.Id == "mega" && Sessions != null) _ = RunMegaAsync(card);
         else if (card.Supplier.Id == "piece" && Sessions != null) _ = RunPieceAsync(card);
+        else if (card.Supplier.Id == "nuldam" && Sessions != null) _ = RunNuldamAsync(card);
         else RunCard(card);
     }
     private async Task RunMegaAsync(OrderCard card)
@@ -196,7 +198,7 @@ public sealed class OrderForm : Form
                 "메가커피 주문 대상과 수량을 SQLite에 저장한 뒤 사이트 확인을 시작했습니다.",
                 supplier: "mega", result: "STARTED");
             var result = await Sessions!.PrepareMegaSiteCartAsync(attempt, data.Store.Database,
-                existing => ConfirmExistingAsync(existing));
+                _ => Task.FromResult(true));
             if (!closing && !IsDisposed)
             {
                 card.State = result.State;
@@ -262,34 +264,46 @@ public sealed class OrderForm : Form
         }
     }
 
-    private Task<bool> ConfirmExistingAsync(IReadOnlyList<SiteCartEntry> existing, string supplierName = "메가커피")
+    private async Task RunNuldamAsync(OrderCard card)
     {
-        if (closing || IsDisposed) return Task.FromResult(false);
-        if (InvokeRequired)
+        activeSitePreparation = true;
+        card.State = "PREPARING"; UpdateActions();
+        try
         {
-            var response = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            BeginInvoke(() =>
+            var targets = new List<SiteCartTarget>();
+            foreach (var line in card.Lines)
             {
-                try { response.SetResult(ConfirmExisting(existing, supplierName)); }
-                catch (Exception ex) { response.SetException(ex); }
-            });
-            return response.Task;
+                if (!NuldamProductLookup.TryProductUrl(line.Product.Url, out var url, out var number))
+                    throw new InvalidDataException("늘담 상품 코드를 확인할 수 없습니다.");
+                targets.Add(new(line.Product.Id, number, url!.ToString(), line.Product.Name,
+                    line.Quantity, line.Product.Price, NuldamProductLookup.PackageKey(line.Product.Name)));
+            }
+            var attempt = data.Store.Database.CreateSiteCartAttempt("nuldam", targets);
+            data.Store.Log.Write(LogLevel.INFO, "SITE_CART_PREPARE_STARTED",
+                "늘담 주문 대상과 수량을 SQLite에 저장한 뒤 사이트 확인을 시작했습니다.",
+                supplier: "nuldam", result: "STARTED");
+            var result = await Sessions!.PrepareNuldamSiteCartAsync(attempt, data.Store.Database);
+            if (!closing && !IsDisposed)
+            {
+                card.State = result.State;
+                if (result.State != "READY") data.Unlock(card.Lines);
+            }
         }
-        return Task.FromResult(ConfirmExisting(existing, supplierName));
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            data.Store.Log.Write(LogLevel.ERROR, "SITE_CART_PREPARE_FAILED",
+                "늘담 사이트 장바구니 준비를 시작하거나 완료하지 못했습니다.",
+                supplier: "nuldam", result: "FAILED", error: ex);
+            if (!closing && !IsDisposed) { card.State = "FAILED"; data.Unlock(card.Lines); }
+        }
+        finally
+        {
+            activeSitePreparation = false;
+            if (!closing && !IsDisposed)
+            { busy = false; UpdateActions(); if (batch) BeginInvoke(Advance); }
+        }
     }
 
-    private bool ConfirmExisting(IReadOnlyList<SiteCartEntry> existing, string supplierName)
-    {
-        if (closing || IsDisposed) return false;
-        string current = string.Join(Environment.NewLine, existing.Take(8).Select(item =>
-            $"• {item.Name} · {item.Quantity}개"));
-        if (existing.Count > 8) current += $"{Environment.NewLine}외 {existing.Count - 8}건";
-        return MessageBox.Show(this,
-            $"{supplierName} 사이트 장바구니에 기존 상품 {existing.Count}건이 있습니다.{Environment.NewLine}" +
-            $"{current}{Environment.NewLine}{Environment.NewLine}" +
-            "기존 사이트 장바구니를 비우고 이번 주문 대상만 담을까요? 주문·결제는 실행하지 않습니다.",
-            "기존 사이트 장바구니 확인", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
-    }
     private void RunCard(OrderCard card)
     {
         card.State = card.Supplier.Manual ? "WAITING_FOR_USER" : "PREPARING"; UpdateActions();

@@ -25,6 +25,21 @@ internal static partial class Program
             try { PieceReadOnlyChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
             catch (Exception ex) { Console.WriteLine("PieceCake read-only check stopped: " + ex.GetType().Name); return 1; }
         }
+        if (args.Contains("--nuldam-login-interactive"))
+        {
+            try { NuldamLoginChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("Nuldam login window stopped: " + ex.GetType().Name); return 1; }
+        }
+        if (args.Contains("--nuldam-readonly"))
+        {
+            try { NuldamReadOnlyChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("Nuldam read-only check stopped: " + ex.GetType().Name + " " + ex.Message); return 1; }
+        }
+        if (args.Contains("--nuldam-cart-live-check"))
+        {
+            try { NuldamSiteCartLiveChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("Nuldam live cart check stopped: " + ex.Message); return 1; }
+        }
         if (args.Contains("--piece-cart-live-check"))
         {
             try
@@ -41,6 +56,11 @@ internal static partial class Program
         if (args.Contains("--piece-xlsx-check"))
         {
             try { CheckPieceXlsxAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: PieceCake XLSX URL import and SQLite restore"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
+        if (args.Contains("--nuldam-xlsx-check"))
+        {
+            try { CheckNuldamXlsxAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: Nuldam XLSX URL import and SQLite restore"); return 0; }
             catch (Exception ex) { Console.WriteLine(ex); return 1; }
         }
         if (args.Contains("--piece-login-interactive"))
@@ -154,6 +174,7 @@ internal static partial class Program
             CheckXlsx();
             CheckXlsxLookupAsync().GetAwaiter().GetResult();
             CheckPieceXlsxAsync().GetAwaiter().GetResult();
+            CheckNuldamXlsxAsync().GetAwaiter().GetResult();
             CheckPieceParserAsync().GetAwaiter().GetResult();
             CheckMegaCartRefreshAsync().GetAwaiter().GetResult();
             CheckImageSaveRules();
@@ -168,6 +189,7 @@ internal static partial class Program
             Run(CheckXlsxUi, CheckDirectory("xlsx-ui"));
             Run(CheckMegaDraft, CheckDirectory("mega-draft"));
             Run(CheckPieceDraft, CheckDirectory("piece-draft"));
+            Run(CheckNuldamDraft, CheckDirectory("nuldam-draft"));
             string logUi = CheckDirectory("log-ui");
             Run(CheckLogUi, logUi);
             Run(CheckLogRestart, logUi);
