@@ -38,7 +38,7 @@ internal static partial class Program
         var sample = data.Products.Single(p => p.Id == 7); data.SetCategory(sample, "과일");
         string image = Path.Combine(dir, "manual-images", "7-xlsx.webp"); Directory.CreateDirectory(Path.GetDirectoryName(image)!); File.WriteAllBytes(image, [1, 2, 3]);
         data.SetManualImage(sample, image); data.AddToCart(sample);
-        var registered = data.RegisterMock("https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000002613", "기타");
+        var registered = data.RegisterMock("https://megacoffee.example.invalid/product/1000002613", "기타");
         data.SetActive(registered, false);
         string exported = Path.Combine(dir, "products.xlsx"); Require(data.ExportWorkbook(exported) == 2, "Only stored products exported");
         using (var book = new XLWorkbook(exported))

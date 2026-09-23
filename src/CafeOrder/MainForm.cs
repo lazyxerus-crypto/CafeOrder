@@ -17,7 +17,7 @@ public partial class MainForm : Form
         typography = new Typography(sample.Store); Ui.Fonts = typography;
         InitializeComponent(); Ui.Role(this, TypographyKey.General); Ui.Role(tabs, TypographyKey.Tab);
         tabs.FontChanged += (_, _) => tabs.ItemSize = new Size(0, tabs.Font.Height + 22);
-        var products = new ProductsView(sample);
+        var products = new ProductsView(sample, sessions);
         tabs.TabPages[0].Controls.Add(products);
         tabs.TabPages[1].Controls.Add(OtherPages.History(sample));
         tabs.TabPages[2].Controls.Add(OtherPages.Suppliers(sample, sessions, this));

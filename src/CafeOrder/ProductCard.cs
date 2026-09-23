@@ -5,12 +5,14 @@ public sealed class ProductCard : Panel
 {
     public Product? Product;
     private readonly SampleData data;
+    private readonly Func<string, Task<MegaProductLookupResult>>? megaLookup;
     private string draftCategory;
     internal event Action? Registered;
     internal event Action? DeleteDraft;
     private TextBox? url;
     private readonly Button undo;
     private Image? manual;
+    private Image? webImage;
     private string feedback = "";
     private bool pressed, dragging, flashing;
     private Point pressedAt;
@@ -47,8 +49,12 @@ public sealed class ProductCard : Panel
         menu.Closed += (_, _) => ArmHint(point); menu.Show(this, point);
     }
     public ProductCard(Product? product, SampleData data, string draftCategory = "기타")
+        : this(product, data, draftCategory, null) { }
+
+    internal ProductCard(Product? product, SampleData data, string draftCategory,
+        Func<string, Task<MegaProductLookupResult>>? megaLookup)
     {
-        this.data = data; Product = product; this.draftCategory = draftCategory;
+        this.data = data; this.megaLookup = megaLookup; Product = product; this.draftCategory = draftCategory;
         Name = product == null ? "Draft_" + Guid.NewGuid().ToString("N") : $"Product_{product.Id}";
         DoubleBuffered = true; ResizeRedraw = true; BackColor = Color.White; AllowDrop = true; Margin = Padding.Empty; TabStop = true;
         undo = Ui.Button("되돌리기", () => Run(() => data.SetActive(Product!, true)), name: "UndoProduct");
@@ -62,10 +68,10 @@ public sealed class ProductCard : Panel
         hover.Tick += (_, _) => { hover.Stop(); if (!IsDisposed && Visible && menu?.Visible != true) hint.Show(TooltipAt(hoverPoint), this, hoverPoint.X, hoverPoint.Y + 22, 5000); };
         highlight.Tick += (_, _) => { highlight.Stop(); flashing = false; Invalidate(); };
         data.ProductChanged += Changed;
-        if (Product != null) LoadManual();
+        if (Product != null) LoadImages();
         SyncState();
     }
-    private void Changed(Product product) { if (Product?.Id == product.Id) { Product = product; SyncState(); PerformLayout(); Invalidate(); } }
+    private void Changed(Product product) { if (Product?.Id == product.Id) { Product = product; LoadImages(); SyncState(); PerformLayout(); Invalidate(); } }
     private void SyncState()
     {
         undo.Visible = Product is { IsActive: false };
@@ -82,12 +88,56 @@ public sealed class ProductCard : Panel
     internal void RegisterDraft()
     {
         if (url == null || string.IsNullOrWhiteSpace(url.Text)) return;
+        if (MegaCoffeeProductLookup.IsMegaHost(url.Text)) { _ = RegisterMegaDraftAsync(); return; }
         void Register()
         {
             Product = data.RegisterMock(url.Text, draftCategory); Name = $"Product_{Product.Id}";
             url.ContextMenuStrip?.Dispose(); url.Dispose(); url = null; SyncState(); PerformLayout(); Registered?.Invoke();
         }
         Run(() => { if (Parent is ProductGrid grid) grid.UpdateInPlace(Register); else Register(); });
+    }
+    internal async Task RegisterMegaDraftAsync()
+    {
+        if (url == null || !url.Enabled || string.IsNullOrWhiteSpace(url.Text)) return;
+        if (megaLookup == null) { feedback = "메가커피 조회를 사용할 수 없습니다"; Invalidate(); return; }
+        string requestedUrl = url.Text.Trim();
+        url.Enabled = false; feedback = "조회 중"; Invalidate();
+        string? imagePath = null;
+        try
+        {
+            var result = await megaLookup(requestedUrl);
+            if (IsDisposed || url == null) return;
+            if (result.Status != MegaProductLookupStatus.Success || result.Product == null)
+            {
+                feedback = result.Status switch
+                {
+                    MegaProductLookupStatus.InvalidUrl => "메가커피 상품 URL을 확인해주세요",
+                    MegaProductLookupStatus.LoginRequired => "메가커피 로그인이 필요합니다",
+                    _ => "상품을 확인하지 못했습니다. 다시 시도해주세요"
+                };
+                return;
+            }
+            imagePath = data.Store.NewWebImagePath();
+            await Task.Run(() => ManualImages.Save(result.Product.ImageBytes, imagePath));
+            if (IsDisposed || url == null) return;
+            void Register()
+            {
+                Product = data.RegisterMegaProduct(result.Product, draftCategory, imagePath);
+                imagePath = null; Name = $"Product_{Product.Id}";
+                url.ContextMenuStrip?.Dispose(); url.Dispose(); url = null;
+                LoadImages(); SyncState(); PerformLayout(); Registered?.Invoke();
+            }
+            if (Parent is ProductGrid grid) grid.UpdateInPlace(Register); else Register();
+            feedback = "";
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        { feedback = "상품 저장에 실패했습니다. 다시 시도해주세요"; }
+        finally
+        {
+            if (imagePath != null) { try { File.Delete(imagePath); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+            if (!IsDisposed && url != null) url.Enabled = true;
+            if (!IsDisposed) Invalidate();
+        }
     }
     public override Size GetPreferredSize(Size proposedSize) => new(proposedSize.Width,
         10 + HeaderHeight(proposedSize.Width) + 6 + InnerWidth(proposedSize.Width) + 6 + NameHeight + 3 + PriceHeight(proposedSize.Width) + 10);
@@ -120,7 +170,7 @@ public sealed class ProductCard : Panel
         }
         else
         {
-            var image = manual ?? SampleImages.Catalog(Product.Category);
+            var image = manual ?? webImage ?? SampleImages.Catalog(Product.Category);
             // Both sources are square; manual files are center-cropped on import.
             g.DrawImage(image, ImageBounds);
             if (manual != null)
@@ -204,6 +254,17 @@ public sealed class ProductCard : Panel
         string? path = Product!.ManualImagePath;
         if (path != null && File.Exists(path)) Run(() => manual = ManualImages.Load(path));
     }
+    private void LoadImages()
+    {
+        LoadManual();
+        webImage?.Dispose(); webImage = null;
+        string? path = Product?.ImageCachePath;
+        if (path != null && File.Exists(path))
+        {
+            try { webImage = ManualImages.Load(path); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or ImageMagick.MagickException) { }
+        }
+    }
     internal void SetManual(string source)
     {
         if (Product is not { IsActive: true }) return;
@@ -230,7 +291,7 @@ public sealed class ProductCard : Panel
         dragging = false;
     }
     protected override void Dispose(bool disposing)
-    { if (disposing) { data.ProductChanged -= Changed; menu?.Dispose(); url?.ContextMenuStrip?.Dispose(); highlight.Dispose(); hover.Dispose(); hint.Dispose(); manual?.Dispose(); } base.Dispose(disposing); }
+    { if (disposing) { data.ProductChanged -= Changed; menu?.Dispose(); url?.ContextMenuStrip?.Dispose(); highlight.Dispose(); hover.Dispose(); hint.Dispose(); manual?.Dispose(); webImage?.Dispose(); } base.Dispose(disposing); }
 }
 
 internal sealed class ProductGrid : BufferedPanel

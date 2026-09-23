@@ -32,7 +32,7 @@ internal static partial class Program
         data.SetCategory(first, "과일"); data.SetActive(data.Products.Single(p => p.Id == 21), false);
         string image = Path.Combine(directory, "manual-images", "7-test.webp"); Directory.CreateDirectory(Path.GetDirectoryName(image)!); File.WriteAllBytes(image, [1, 2, 3]);
         data.SetManualImage(first, image);
-        var registered = data.RegisterMock("https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000002613", "티백");
+        var registered = data.RegisterMock("https://megacoffee.example.invalid/product/1000002613", "티백");
         Require(registered.Id == 25 && registered.DataOrigin == "UserMock", "Registered ID and origin");
         data.AddToCart(registered);
         var again = new SampleData(new LocalState(directory));

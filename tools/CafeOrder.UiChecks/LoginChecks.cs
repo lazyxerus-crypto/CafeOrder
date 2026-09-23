@@ -6,6 +6,37 @@ using System.Text.RegularExpressions;
 
 internal static class LoginChecks
 {
+    internal static async Task LookupMegaProductAsync(string url, string output)
+    {
+        await using var manager = new SupplierSessionManager();
+        var result = await manager.LookupMegaProductAsync(url);
+        Console.WriteLine("MegaCoffee lookup: " + result.Status);
+        if (result.Product is not { } product) throw new Exception("Product lookup did not return a verified product");
+        Console.WriteLine("Name: " + product.Name);
+        Console.WriteLine("Price: " + product.Price);
+        Console.WriteLine("Display price: " + product.DisplayPrice);
+        Console.WriteLine("Available: " + product.Available);
+        Console.WriteLine("Image bytes: " + product.ImageBytes.Length);
+        string isolated = Path.GetFullPath(Path.Combine(output, "isolated-" + Guid.NewGuid().ToString("N")));
+        string outputRoot = Path.GetFullPath(output) + Path.DirectorySeparatorChar;
+        if (!isolated.StartsWith(outputRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Isolated test path escaped the artifact directory");
+        try
+        {
+            var data = new SampleData(new LocalState(isolated));
+            string imagePath = data.Store.NewWebImagePath();
+            ManualImages.Save(product.ImageBytes, imagePath);
+            var saved = data.RegisterMegaProduct(product, "기타", imagePath);
+            var restarted = new SampleData(new LocalState(isolated)).Products.Single(p => p.Id == saved.Id);
+            if (restarted.Name != product.Name || restarted.Price != product.Price ||
+                restarted.PriceText != product.DisplayPrice || restarted.ImageUrl != product.ImageUrl ||
+                restarted.Url != product.ProductUrl || restarted.Available != product.Available ||
+                !File.Exists(restarted.ImageCachePath))
+                throw new InvalidDataException("Product did not survive SQLite restart");
+            Console.WriteLine("SQLite restart and WebP cache: PASS");
+        }
+        finally { if (Directory.Exists(isolated)) Directory.Delete(isolated, true); }
+    }
     internal static void CurrentMegaUiStatus()
     {
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);

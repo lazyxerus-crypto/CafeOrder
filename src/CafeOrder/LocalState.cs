@@ -51,6 +51,7 @@ public sealed class LocalState
     }
     internal string LegacyManualImagePath(int id) => Path.Combine(DirectoryPath, "manual-images", id + ".webp");
     internal string NewManualImagePath(int id) => Path.Combine(DirectoryPath, "manual-images", $"{id}-{Guid.NewGuid():N}.webp");
+    internal string NewWebImagePath() => Path.Combine(DirectoryPath, "web-images", $"{Guid.NewGuid():N}.webp");
 }
 
 // XLSX is an interchange format; SQLite remains the live store.

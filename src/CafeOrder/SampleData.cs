@@ -152,12 +152,27 @@ public sealed class SampleData
     }
     public Product RegisterMock(string url, string category)
     {
+        if (MegaCoffeeProductLookup.IsMegaHost(url))
+            throw new ArgumentException("메가커피 실제 상품은 로그인된 페이지 조회 후 등록해야 합니다.");
         var seller = DetectSupplier(url) ?? throw new ArgumentException("지원하지 않는 상품 링크입니다");
         var source = Products.First(p => p.Supplier.Id == seller.Id);
         var product = Store.Database.InsertProduct(new Product(0, source.Name, source.Price, source.PriceNote, seller, category, true, 0)
         { Url = url.Trim(), DisplayPrice = source.PriceText });
         Products.Add(product);
         return product; // The same draft control adopts this record without refreshing or sorting the catalog.
+    }
+    internal Product RegisterMegaProduct(MegaCoffeeProductSnapshot snapshot, string category, string imagePath)
+    {
+        if (!Categories.Skip(1).Contains(category) || !File.Exists(imagePath))
+            throw new ArgumentException("상품 분류 또는 이미지 파일이 올바르지 않습니다.");
+        var seller = Suppliers.Single(s => s.Id == "mega");
+        var product = Store.Database.InsertProduct(new Product(0, snapshot.Name, snapshot.Price, "", seller, category, snapshot.Available, 0)
+        {
+            Url = snapshot.ProductUrl, DisplayPrice = snapshot.DisplayPrice,
+            ImageUrl = snapshot.ImageUrl, ImageCachePath = imagePath
+        });
+        Products.Add(product);
+        return product;
     }
     private IProductWorkbook Workbook() => new ClosedXmlProductWorkbook(Suppliers, Categories);
     public ProductTransferRow[] ExportRows() => Store.Database.ReadProducts(Suppliers)

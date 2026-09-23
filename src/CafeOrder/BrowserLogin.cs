@@ -92,6 +92,78 @@ internal sealed class SupplierSessionManager : IAsyncDisposable
     internal Task OpenLoginAsync(string supplierId, LoginCredentials? entered = null)
         => Begin(supplierId, true, entered);
 
+    internal Task<MegaProductLookupResult> LookupMegaProductAsync(string url)
+    {
+        if (!MegaCoffeeProductLookup.TryProductUrl(url, out var uri, out var goodsNo))
+            return Task.FromResult(new MegaProductLookupResult(MegaProductLookupStatus.InvalidUrl));
+        lock (sync)
+        {
+            if (disposed) return Task.FromResult(new MegaProductLookupResult(MegaProductLookupStatus.Failed));
+            var slot = slots["mega"];
+            var prior = slot.Running;
+            var cancel = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+            slot.Cancel = cancel;
+            var task = RunMegaProductAfterAsync(prior, slot, uri!, goodsNo, cancel);
+            slot.Running = task;
+            return task;
+        }
+    }
+
+    private async Task<MegaProductLookupResult> RunMegaProductAfterAsync(Task? prior, SessionSlot slot,
+        Uri uri, string goodsNo, CancellationTokenSource cancel)
+    {
+        try
+        {
+            if (prior != null) await prior;
+            cancel.Token.ThrowIfCancellationRequested();
+            Directory.CreateDirectory(ProfilePath("mega"));
+            using var playwright = await Playwright.CreateAsync();
+            var context = await playwright.Chromium.LaunchPersistentContextAsync(ProfilePath("mega"), new()
+            {
+                Channel = "msedge", Headless = true, ChromiumSandbox = true, AcceptDownloads = false
+            });
+            slot.Context = context;
+            var probe = new MegaCoffeeLoginProbe();
+            var vault = new BrowserCookieVault(ProfilePath("mega"), "mega");
+            try
+            {
+                await vault.RestoreAsync(context);
+                cancel.Token.ThrowIfCancellationRequested();
+                var page = context.Pages.FirstOrDefault() ?? await context.NewPageAsync();
+                await page.GotoAsync(probe.HomeUrl, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 20000 });
+                var loginState = await probe.CheckAsync(page);
+                if (loginState == SupplierLoginState.LoginRequired)
+                {
+                    vault.Clear(); Publish("mega", SupplierLoginState.LoginRequired);
+                    return new(MegaProductLookupStatus.LoginRequired);
+                }
+                if (loginState != SupplierLoginState.LoggedIn) return new(MegaProductLookupStatus.Failed);
+                cancel.Token.ThrowIfCancellationRequested();
+                var product = await MegaCoffeeProductLookup.FetchAsync(page, context, uri, goodsNo, probe);
+                await vault.SaveAsync(context, probe.HomeUrl);
+                Publish("mega", SupplierLoginState.LoggedIn);
+                return new(MegaProductLookupStatus.Success, product);
+            }
+            catch (MegaCoffeeLoginRequiredException)
+            {
+                vault.Clear(); Publish("mega", SupplierLoginState.LoginRequired);
+                return new(MegaProductLookupStatus.LoginRequired);
+            }
+            finally
+            {
+                try { await context.CloseAsync(); } catch (PlaywrightException) { }
+                slot.Context = null;
+            }
+        }
+        catch (OperationCanceledException) { return new(MegaProductLookupStatus.Failed); }
+        catch (Exception) { return new(MegaProductLookupStatus.Failed); }
+        finally
+        {
+            lock (sync) { if (ReferenceEquals(slot.Cancel, cancel)) slot.Cancel = null; }
+            cancel.Dispose();
+        }
+    }
+
     private Task Begin(string id, bool interactive, LoginCredentials? entered)
     {
         if (!slots.TryGetValue(id, out var slot)) throw new ArgumentException("AUTO 판매처가 아닙니다.", nameof(id));

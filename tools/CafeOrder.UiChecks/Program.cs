@@ -15,6 +15,21 @@ internal static partial class Program
     private static int Main(string[] args)
     {
         output = Path.GetFullPath(args.Length == 0 ? "artifacts/ui-checks" : args[0]); Directory.CreateDirectory(output);
+        if (args.Contains("--mega-parser-check"))
+        {
+            try { CheckMegaParserAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: MegaCoffee parser fixtures"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
+        int productLookup = Array.IndexOf(args, "--mega-product-lookup");
+        if (productLookup >= 0)
+        {
+            try
+            {
+                if (productLookup + 1 >= args.Length) throw new ArgumentException("Product URL required");
+                LoginChecks.LookupMegaProductAsync(args[productLookup + 1], output).GetAwaiter().GetResult(); return 0;
+            }
+            catch (Exception ex) { Console.WriteLine("Product lookup stopped: " + ex.GetType().Name); return 1; }
+        }
         if (args.Contains("--mega-ui-current"))
         {
             try { LoginChecks.CurrentMegaUiStatus(); return 0; }
@@ -72,6 +87,7 @@ internal static partial class Program
             var store = new LocalState(statePath); Require(store.Preferences.Window?.Maximized == true, "Closing a maximized window saves its state"); store.Preferences.Window = new(-30000, -30000, 10, 10, true); store.SavePreferences();
             Run(CheckOffscreen);
             Run(CheckXlsxUi, CheckDirectory("xlsx-ui"));
+            Run(CheckMegaDraft, CheckDirectory("mega-draft"));
         }
         catch (Exception ex) { failure = ex; }
         finally { if (clipboard != null) Clipboard.SetDataObject(clipboard, true); else Clipboard.Clear(); }
@@ -234,7 +250,7 @@ internal static partial class Program
         grid.AutoScrollPosition = new Point(0, 35); Pump();
         var registrationOrder = grid.Items.ToArray(); var registrationBounds = draft.Bounds; var registrationScroll = grid.AutoScrollPosition;
         Require(registrationScroll.Y < 0, "Registration also tested with nonzero scroll");
-        url.Text = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000002613"; draft.RegisterDraft();
+        url.Text = "https://megacoffee.example.invalid/product/1000002613"; draft.RegisterDraft();
         Require(draft.Visible && registrationOrder.SequenceEqual(grid.Items) && draft.Bounds == registrationBounds && grid.AutoScrollPosition == registrationScroll, $"URL position: visible={draft.Visible} order={registrationOrder.SequenceEqual(grid.Items)} bounds={registrationBounds} -> {draft.Bounds} scroll={registrationScroll} -> {grid.AutoScrollPosition}");
         main.Size = previousSize;
         Require(!draft.IsDraft && draft.Product!.Category == "티백" && grid.Controls.Contains(draft) && data.Products.Count == count + 1, "Mock URL success converts same card and persists category"); registeredId = draft.Product!.Id;
