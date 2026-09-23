@@ -11,9 +11,11 @@ internal static class ManualImages
     {
         using var image = new MagickImage(source);
         image.AutoOrient(); uint side = Math.Min(image.Width, image.Height);
-        image.Crop(side, side, Gravity.Center); image.ResetPage(); image.Strip(); image.Quality = 80;
+        image.Crop(side, side, Gravity.Center); image.ResetPage();
+        if (side > 800) image.Resize(800, 800);
+        image.Strip(); image.Quality = 80;
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        string pending = destination + ".tmp";
+        string pending = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try { image.Write(pending, MagickFormat.WebP); File.Move(pending, destination, true); }
         finally { if (File.Exists(pending)) File.Delete(pending); }
     }

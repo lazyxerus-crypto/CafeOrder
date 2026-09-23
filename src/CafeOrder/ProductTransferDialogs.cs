@@ -27,13 +27,13 @@ internal sealed class WinFormsProductTransferDialogs : IProductTransferDialogs
     }
     public bool Confirm(IWin32Window owner, ProductImportPlan plan) =>
         MessageBox.Show(owner,
-            $"추가 상품 {plan.Added}개\n수정 상품 {plan.Updated}개\n비활성 변경 {plan.Deactivated}개\n오류 0개\n\n적용하시겠습니까?",
+            $"추가 상품 {plan.Added}개\n수정 상품 {plan.Updated}개\n건너뜀 {plan.Skipped}개\n비활성 변경 {plan.Deactivated}개\n실패 0개\n\n적용하시겠습니까?",
             "상품 XLSX 가져오기", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
     public void Show(IWin32Window owner, string message, bool error) =>
         MessageBox.Show(owner, message, "상품 XLSX", MessageBoxButtons.OK, error ? MessageBoxIcon.Error : MessageBoxIcon.Information);
     public void ShowIssues(IWin32Window owner, ProductImportPlan plan)
     {
-        using var dialog = new Form { Text = $"상품 XLSX · 추가 {plan.Added} · 수정 {plan.Updated} · 실패 {plan.Failed} · DB 변경 없음", StartPosition = FormStartPosition.CenterParent,
+        using var dialog = new Form { Text = $"상품 XLSX · 추가 0 · 수정 0 · 건너뜀 {plan.Skipped} · 실패 {plan.Failed} · DB 변경 없음", StartPosition = FormStartPosition.CenterParent,
             Width = 680, Height = 420, MinimumSize = new Size(440, 260) };
         var details = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, WordWrap = false,
             ScrollBars = ScrollBars.Both, Text = string.Join(Environment.NewLine, plan.Issues) };

@@ -20,6 +20,16 @@ internal static partial class Program
             try { CheckXlsxLookupAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: linked XLSX validation and rollback"); return 0; }
             catch (Exception ex) { Console.WriteLine(ex); return 1; }
         }
+        if (args.Contains("--image-check"))
+        {
+            try { CheckImageSaveRules(); Console.WriteLine("PASS: image save rules"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
+        if (args.Contains("--log-check"))
+        {
+            try { CheckOperationalLogAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: operational log storage"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
         if (args.Contains("--xlsx-live-check"))
         {
             try { CheckXlsxLiveAsync(output).GetAwaiter().GetResult(); return 0; }
@@ -90,6 +100,8 @@ internal static partial class Program
             CheckDatabase();
             CheckXlsx();
             CheckXlsxLookupAsync().GetAwaiter().GetResult();
+            CheckImageSaveRules();
+            CheckOperationalLogAsync().GetAwaiter().GetResult();
             if (args.Contains("--repro-six")) { Run(ReproSix); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             if (args.Contains("--repro-seven")) { Run(ReproSeven); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             SeedUiFixture();
@@ -99,6 +111,9 @@ internal static partial class Program
             Run(CheckOffscreen);
             Run(CheckXlsxUi, CheckDirectory("xlsx-ui"));
             Run(CheckMegaDraft, CheckDirectory("mega-draft"));
+            string logUi = CheckDirectory("log-ui");
+            Run(CheckLogUi, logUi);
+            Run(CheckLogRestart, logUi);
         }
         catch (Exception ex) { failure = ex; }
         finally { if (clipboard != null) Clipboard.SetDataObject(clipboard, true); else Clipboard.Clear(); }
@@ -160,7 +175,8 @@ internal static partial class Program
         dialogs.ImportPath = dialogs.ExportPath;
         Find<Button>(main, "ImportProducts").PerformClick();
         for (int i = 0; i < 100 && All(main).OfType<ProductsView>().Single().importing; i++) await Task.Delay(50);
-        Require(dialogs.Preview is { Issues.Count: 0 } && dialogs.Messages.Last().Contains("가져오기 완료"), "Existing import button validates and confirms XLSX");
+        Require(dialogs.Preview == null && dialogs.Messages.Last().Contains("가져오기 완료") &&
+            dialogs.Messages.Last().Contains("DB 변경 없음"), "Unchanged export roundtrip needs no confirmation or DB write");
         var card = Find<ProductCard>(grid, "Product_1"); search.Text = "포모나";
         Require(!All(card).OfType<TextBox>().Any() && !All(card).OfType<Button>().Any(b => b.Text.Contains("장바구니")), "No copy textboxes or add button in normal cards");
         int qty = data.Cart.Single(l => l.Product.Id == 1).Quantity;

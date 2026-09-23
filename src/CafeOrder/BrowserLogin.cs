@@ -59,6 +59,7 @@ internal sealed class SupplierSessionManager : IAsyncDisposable
     private readonly Dictionary<string, SessionSlot> slots = AutoIds.ToDictionary(id => id, _ => new SessionSlot());
     private readonly Dictionary<string, ISupplierLoginProbe> probes;
     private readonly ILoginCredentialSource credentials;
+    private readonly OperationalLog? log;
     private readonly CancellationTokenSource shutdown = new();
     private readonly object sync = new();
     private readonly string profileRoot;
@@ -67,11 +68,12 @@ internal sealed class SupplierSessionManager : IAsyncDisposable
     internal event Action<string, SupplierLoginState>? StateChanged;
 
     internal SupplierSessionManager(string? profileRoot = null, ILoginCredentialSource? credentials = null,
-        Dictionary<string, ISupplierLoginProbe>? probes = null)
+        Dictionary<string, ISupplierLoginProbe>? probes = null, OperationalLog? log = null)
     {
         this.profileRoot = profileRoot ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeOrder", "BrowserProfiles");
         this.credentials = credentials ?? new NoStoredLoginCredentials();
         this.probes = probes ?? new() { ["mega"] = new MegaCoffeeLoginProbe() };
+        this.log = log;
     }
 
     internal string ProfilePath(string supplierId)
@@ -95,7 +97,11 @@ internal sealed class SupplierSessionManager : IAsyncDisposable
     internal Task<MegaProductLookupResult> LookupMegaProductAsync(string url)
     {
         if (!MegaCoffeeProductLookup.TryProductUrl(url, out var uri, out var goodsNo))
+        {
+            log?.Write(LogLevel.WARN, "PRODUCT_LOOKUP_FAILED", "메가커피 상품 URL 형식이 올바르지 않습니다.",
+                supplier: "mega", result: "FAILED", reason: "INVALID_URL");
             return Task.FromResult(new MegaProductLookupResult(MegaProductLookupStatus.InvalidUrl));
+        }
         lock (sync)
         {
             if (disposed) return Task.FromResult(new MegaProductLookupResult(MegaProductLookupStatus.Failed));
@@ -105,8 +111,39 @@ internal sealed class SupplierSessionManager : IAsyncDisposable
             slot.Cancel = cancel;
             var task = RunMegaProductAfterAsync(prior, slot, uri!, goodsNo, cancel);
             slot.Running = task;
-            return task;
+            return LogLookupAsync(task);
         }
+    }
+
+    private async Task<MegaProductLookupResult> LogLookupAsync(Task<MegaProductLookupResult> task)
+    {
+        var result = await task;
+        if (result.Status == MegaProductLookupStatus.Success)
+            log?.Write(LogLevel.INFO, "PRODUCT_LOOKUP_SUCCESS", "메가커피 상품정보와 이미지를 확인했습니다.",
+                supplier: "mega", result: "SUCCESS");
+        else
+        {
+            string reason = result.Status switch
+            {
+                MegaProductLookupStatus.LoginRequired => "LOGIN_REQUIRED",
+                MegaProductLookupStatus.InvalidUrl => "INVALID_URL",
+                _ when result.Reason?.Contains("상품명", StringComparison.Ordinal) == true => "NAME_UNAVAILABLE",
+                _ when result.Reason?.Contains("판매가", StringComparison.Ordinal) == true ||
+                    result.Reason?.Contains("가격", StringComparison.Ordinal) == true => "PRICE_UNAVAILABLE",
+                _ when result.Reason?.Contains("이미지", StringComparison.Ordinal) == true => "IMAGE_UNAVAILABLE",
+                _ when result.Reason?.Contains("품절", StringComparison.Ordinal) == true => "STOCK_UNAVAILABLE",
+                _ => "PAGE_OR_BROWSER_ERROR"
+            };
+            log?.Write(LogLevel.WARN, "PRODUCT_LOOKUP_FAILED", "메가커피 상품 조회를 완료하지 못했습니다.",
+                supplier: "mega", result: "FAILED", reason: reason);
+            if (result.Reason?.Contains("이미지 파일", StringComparison.Ordinal) == true)
+                log?.Write(LogLevel.ERROR, "IMAGE_DOWNLOAD_FAILED", "메가커피 상품 이미지 파일을 내려받지 못했습니다.",
+                    supplier: "mega", result: "FAILED", reason: "IMAGE_RESPONSE_INVALID");
+            else if (reason == "IMAGE_UNAVAILABLE")
+                log?.Write(LogLevel.WARN, "IMAGE_SOURCE_FAILED", "메가커피 상품 이미지 주소를 확인하지 못했습니다.",
+                    supplier: "mega", result: "FAILED", reason: "IMAGE_SOURCE_MISSING");
+        }
+        return result;
     }
 
     private async Task<MegaProductLookupResult> RunMegaProductAfterAsync(Task? prior, SessionSlot slot,
@@ -156,8 +193,13 @@ internal sealed class SupplierSessionManager : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) { return new(MegaProductLookupStatus.Failed); }
-        catch (InvalidDataException ex) { return new(MegaProductLookupStatus.Failed, Reason: ex.Message); }
-        catch (Exception) { return new(MegaProductLookupStatus.Failed); }
+        catch (InvalidDataException ex) { return new(MegaProductLookupStatus.Failed, Reason: ex.Message, ErrorType: ex.GetType().Name); }
+        catch (Exception ex)
+        {
+            log?.Write(LogLevel.ERROR, "PRODUCT_LOOKUP_EXCEPTION", "메가커피 조회 중 브라우저 또는 파일 처리가 실패했습니다.",
+                supplier: "mega", result: "FAILED", error: ex);
+            return new(MegaProductLookupStatus.Failed, ErrorType: ex.GetType().Name);
+        }
         finally
         {
             lock (sync) { if (ReferenceEquals(slot.Cancel, cancel)) slot.Cancel = null; }
@@ -191,7 +233,15 @@ internal sealed class SupplierSessionManager : IAsyncDisposable
             await RunAsync(id, slot, probe, interactive, entered, cancel.Token);
         }
         catch (OperationCanceledException) { }
-        catch (Exception) { if (!cancel.IsCancellationRequested) Publish(id, SupplierLoginState.Error); }
+        catch (Exception ex)
+        {
+            if (!cancel.IsCancellationRequested)
+            {
+                log?.Write(LogLevel.ERROR, "SUPPLIER_LOGIN_CHECK_FAILED", "판매처 로그인 상태를 확인하지 못했습니다.",
+                    supplier: id, result: "FAILED", error: ex);
+                Publish(id, SupplierLoginState.Error);
+            }
+        }
         finally
         {
             lock (sync) { if (ReferenceEquals(slot.Cancel, cancel)) slot.Cancel = null; }
@@ -261,6 +311,9 @@ internal sealed class SupplierSessionManager : IAsyncDisposable
         var slot = slots[id];
         if (slot.State == state) return;
         slot.State = state;
+        log?.Write(state == SupplierLoginState.Error ? LogLevel.ERROR : LogLevel.INFO,
+            "SUPPLIER_LOGIN_STATE", "판매처 로그인 상태가 변경됐습니다.", supplier: id,
+            result: state.ToString().ToUpperInvariant());
         StateChanged?.Invoke(id, state);
     }
 

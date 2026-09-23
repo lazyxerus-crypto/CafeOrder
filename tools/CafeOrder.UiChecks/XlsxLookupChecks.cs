@@ -19,7 +19,7 @@ internal static partial class Program
                 sheet.Cell(3, 7).Value = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000002613";
             });
             var data = new SampleData(new LocalState(isolated));
-            await using var sessions = new SupplierSessionManager();
+            await using var sessions = new SupplierSessionManager(log: data.Store.Log);
             using var plan = await data.PrepareImportAsync(workbook, sessions.LookupMegaProductAsync, null, CancellationToken.None);
             if (plan.Issues.Count != 0) throw new InvalidDataException(string.Join("; ", plan.Issues));
             Require(plan.Added == 2 && plan.Changes.All(change => File.Exists(change.PendingImagePath)),
@@ -29,6 +29,11 @@ internal static partial class Program
             Require(restarted.Products.Count(product => product.ImageCachePath != null) == 2 &&
                 restarted.Products.Where(product => product.ImageCachePath != null).All(product => File.Exists(product.ImageCachePath)),
                 "Two real products and WebP images survive SQLite restart");
+            await data.Store.Log.FlushAsync();
+            string events = await data.Store.Log.ReadRecentAsync();
+            Require(events.Split("PRODUCT_LOOKUP_SUCCESS").Length - 1 == 2 &&
+                !events.Contains("goodsNo=") && !events.Contains("session-cookies"),
+                "Real lookup successes are logged without product URLs or session values");
             foreach (var product in restarted.Products.Where(product => product.ImageCachePath != null))
                 Console.WriteLine($"{product.Name}: {product.PriceText}, available={product.Available}");
             Console.WriteLine("PASS: two real MegaCoffee XLSX URLs, backup, SQLite restart, WebP images");
@@ -43,6 +48,7 @@ internal static partial class Program
         const string yogurt = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=79359";
         const string peach = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000002613";
         const string third = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000027811";
+        const string fourth = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000027812";
         using var image = new Bitmap(30, 30);
         using (var graphics = Graphics.FromImage(image)) graphics.Clear(Color.CornflowerBlue);
         using var stream = new MemoryStream(); image.Save(stream, ImageFormat.Png);
@@ -55,7 +61,8 @@ internal static partial class Program
         {
             [yogurt] = Snapshot(yogurt, "민트라벨 요거트 파우더 1kg", 15200, true),
             [peach] = Snapshot(peach, "복숭아 농축액 1.9kg", 20330, false),
-            [third] = Snapshot(third, "rollback-new 파우더", 9000, true)
+            [third] = Snapshot(third, "rollback-new 파우더", 9000, true),
+            [fourth] = Snapshot(fourth, "혼합 신규 원두", 11000, true)
         };
         int lookups = 0;
         Task<MegaProductLookupResult> Lookup(string url)
@@ -121,12 +128,33 @@ internal static partial class Program
         int beforeCount = data.Store.Database.ReadProducts(data.Suppliers).Count;
         int beforeBackups = Backups().Length;
         string duplicate = MakeWorkbook(dir, "linked-duplicate", sheet =>
-        { sheet.Cell(2, 7).Value = third; sheet.Cell(3, 7).Value = third; });
+        {
+            sheet.Cell(2, 7).Value = third + "&utm_source=x";
+            sheet.Cell(3, 7).Value = third.Replace("www.", "") + "&tracking=1";
+        });
+        int beforeDuplicateLookups = lookups;
         using (var plan = await data.PrepareImportAsync(duplicate, Lookup, null, CancellationToken.None))
-            Require(plan.Issues.Any(issue => issue.Row == 3 && issue.Column == "ProductUrl"), "Repeated URL in one XLSX is rejected");
-        string alreadyRegistered = MakeWorkbook(dir, "linked-existing", sheet => sheet.Cell(2, 7).Value = yogurt);
+            Require(plan.Issues.Count == 0 && plan.Added == 1 && plan.Skipped == 1 &&
+                plan.SkippedRows.Single().SheetRow == 3 && lookups == beforeDuplicateLookups + 1,
+                "Same goodsNo with tracking or host variation skips second row before lookup");
+        string alreadyRegistered = MakeWorkbook(dir, "linked-existing", sheet => sheet.Cell(2, 7).Value = yogurt + "&utm_source=again");
+        int beforeExistingLookups = lookups;
         using (var plan = await data.PrepareImportAsync(alreadyRegistered, Lookup, null, CancellationToken.None))
-            Require(plan.Issues.Any(issue => issue.Row == 2 && issue.Reason.Contains("이미 등록")), "Blank ID never duplicates an existing URL");
+            Require(plan.Issues.Count == 0 && plan.Changes.Count == 0 && plan.Skipped == 1 &&
+                lookups == beforeExistingLookups, "Already registered goodsNo skips without lookup or DB change");
+        string explicitUpdate = MakeWorkbook(dir, "linked-explicit-wins", sheet =>
+        { sheet.Cell(2, 7).Value = yogurt; sheet.Cell(3, 1).Value = yogurtProduct.Id; sheet.Cell(3, 7).Value = yogurt + "&tracking=1"; });
+        using (var plan = await data.PrepareImportAsync(explicitUpdate, Lookup, null, CancellationToken.None))
+            Require(plan.Issues.Count == 0 && plan.Skipped == 1 && plan.Updated == 1 &&
+                plan.Changes.Single().SheetRow == 3, "Explicit ProductId update is not skipped by duplicate blank-ID row");
+        string conflictingIds = MakeWorkbook(dir, "linked-conflicting-ids", sheet =>
+        {
+            sheet.Cell(2, 1).Value = yogurtProduct.Id; sheet.Cell(2, 7).Value = third;
+            sheet.Cell(3, 1).Value = peachProduct.Id; sheet.Cell(3, 7).Value = third + "&tracking=1";
+        });
+        using (var plan = await data.PrepareImportAsync(conflictingIds, Lookup, null, CancellationToken.None))
+            Require(plan.Issues.Any(issue => issue.Row == 3 && issue.Reason.Contains("서로 다른 ProductId")),
+                "Different ProductIds targeting one goodsNo fail without merge");
         string unsupported = MakeWorkbook(dir, "linked-unsupported", sheet =>
         { sheet.Cell(2, 7).Value = third; sheet.Cell(3, 7).Value = "https://www.piececake.co.kr/product/product_view?prodNo=PD2637"; });
         using (var plan = await data.PrepareImportAsync(unsupported, Lookup, null, CancellationToken.None))
@@ -182,6 +210,24 @@ internal static partial class Program
         catch (InvalidDataException ex) { Require(ex.Message.Contains("ProductUrl"), "Concurrent duplicate identifies URL"); }
         Require(!File.Exists(raceImage) && data.Store.Database.ReadProducts(data.Suppliers).Count == beforeCount + 1,
             "Duplicate appearing after preview cannot create a second product");
+        string mixed = MakeWorkbook(dir, "linked-mixed-skip", sheet =>
+        { sheet.Cell(2, 7).Value = third + "&tracking=again"; sheet.Cell(3, 7).Value = fourth; });
+        int beforeMixedLookups = lookups;
+        using (var plan = await data.PrepareImportAsync(mixed, Lookup, null, CancellationToken.None))
+        {
+            Require(plan.Issues.Count == 0 && plan.Skipped == 1 && plan.Added == 1 &&
+                lookups == beforeMixedLookups + 1, "Existing and new URLs mix without requerying duplicate");
+            data.ApplyImport(plan);
+        }
+        Require(data.Products.Single(product => product.Url == fourth).Name == "혼합 신규 원두" &&
+            data.Store.Database.ReadProducts(data.Suppliers).Count == beforeCount + 2,
+            "Mixed import saves only new goodsNo");
+        await data.Store.Log.FlushAsync();
+        string log = await data.Store.Log.ReadRecentAsync();
+        Require(log.Contains("XLSX_ROW_ADDED") && log.Contains("XLSX_ROW_UPDATED") &&
+            log.Contains("XLSX_ROW_SKIPPED") && log.Contains("XLSX_ROW_FAILED") &&
+            log.Contains("XLSX_IMPORT_APPLIED") && !log.Contains("utm_source"),
+            "XLSX row results are logged without URL tracking parameters");
         results.Add("Linked XLSX: lookup, update, normal rows, duplicate/errors, cancellation, backup/rollback, restart PASS");
     }
 }

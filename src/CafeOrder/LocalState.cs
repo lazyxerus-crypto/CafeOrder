@@ -16,6 +16,7 @@ public sealed class LocalState
 {
     public string DirectoryPath { get; }
     internal CatalogDatabase Database { get; }
+    internal OperationalLog Log { get; }
     public UiPreferences Preferences { get; }
     public LocalState(string? directory = null)
     {
@@ -23,7 +24,11 @@ public sealed class LocalState
         string dataDirectory = directory == null
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeOrder", "Data")
             : Path.Combine(directory, "Data");
-        Database = new CatalogDatabase(Path.Combine(dataDirectory, "CafeOrder.db"));
+        string logDirectory = directory == null
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeOrder", "Logs")
+            : Path.Combine(directory, "Logs");
+        Log = directory == null ? OperationalLog.Default : new OperationalLog(logDirectory);
+        Database = new CatalogDatabase(Path.Combine(dataDirectory, "CafeOrder.db"), Log);
         Preferences = Read<UiPreferences>("ui-state.json") ?? new();
         Preferences.Columns = Math.Clamp(Preferences.Columns, 3, 5);
         Preferences.FontSizes ??= [];

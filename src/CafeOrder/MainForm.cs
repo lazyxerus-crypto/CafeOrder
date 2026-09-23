@@ -11,9 +11,10 @@ public partial class MainForm : Form
     public MainForm() : this(null) { }
     public MainForm(string? stateDirectory)
     {
-        sessions = new SupplierSessionManager(stateDirectory == null ? null : Path.Combine(stateDirectory, "browser-profiles"));
-        checkLoginOnShown = stateDirectory == null;
         sample = new SampleData(new LocalState(stateDirectory));
+        sessions = new SupplierSessionManager(stateDirectory == null ? null : Path.Combine(stateDirectory, "browser-profiles"),
+            log: sample.Store.Log);
+        checkLoginOnShown = stateDirectory == null;
         typography = new Typography(sample.Store); Ui.Fonts = typography;
         InitializeComponent(); Ui.Role(this, TypographyKey.General); Ui.Role(tabs, TypographyKey.Tab);
         tabs.FontChanged += (_, _) => tabs.ItemSize = new Size(0, tabs.Font.Height + 22);

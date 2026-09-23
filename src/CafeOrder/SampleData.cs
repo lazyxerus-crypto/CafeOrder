@@ -106,6 +106,8 @@ public sealed partial class SampleData
         if (line == null) line = new(p, quantity);
         else line.Quantity = quantity;
         Cart.Remove(line); Cart.Insert(0, line);
+        Store.Log.Write(LogLevel.INFO, "CART_ITEM_ADDED", "상품을 로컬 장바구니에 담았습니다.",
+            supplier: p.Supplier.Id, productId: p.Id, result: "SUCCESS");
         Notify();
         ProductAdded?.Invoke(p);
     }
@@ -116,12 +118,17 @@ public sealed partial class SampleData
         Store.Database.SetQuantity(line.Product.Id, quantity);
         line.Quantity = quantity;
         if (quantity == 0) Cart.Remove(line);
+        Store.Log.Write(LogLevel.INFO, quantity == 0 ? "CART_ITEM_REMOVED" : "CART_QUANTITY_CHANGED",
+            quantity == 0 ? "상품을 로컬 장바구니에서 제거했습니다." : "로컬 장바구니 수량을 변경했습니다.",
+            supplier: line.Product.Supplier.Id, productId: line.Product.Id, result: "SUCCESS");
         Notify();
     }
     public void Remove(CartLine line)
     {
         if (IsLocked(line.Product) || !Cart.Contains(line)) return;
         Store.Database.RemoveCart([line.Product.Id]); Cart.Remove(line);
+        Store.Log.Write(LogLevel.INFO, "CART_ITEM_REMOVED", "상품을 로컬 장바구니에서 제거했습니다.",
+            supplier: line.Product.Supplier.Id, productId: line.Product.Id, result: "SUCCESS");
         Notify();
     }
     public void Complete(IEnumerable<CartLine> lines)
@@ -129,6 +136,9 @@ public sealed partial class SampleData
         var selected = lines.ToArray();
         Store.Database.RemoveCart(selected.Select(line => line.Product.Id));
         foreach (var line in selected) Cart.Remove(line);
+        foreach (var line in selected)
+            Store.Log.Write(LogLevel.INFO, "CART_ITEM_REMOVED", "주문 진행 대상으로 옮기며 로컬 장바구니에서 제거했습니다.",
+                supplier: line.Product.Supplier.Id, productId: line.Product.Id, result: "SUCCESS", reason: "ORDER_PROGRESS");
         Notify();
     }
     public void Notify() => CartChanged?.Invoke();
@@ -136,6 +146,9 @@ public sealed partial class SampleData
     {
         bool previous = product.IsActive; product.IsActive = active;
         try { Store.Database.SaveProduct(product); } catch { product.IsActive = previous; throw; }
+        Store.Log.Write(LogLevel.INFO, active ? "PRODUCT_RESTORED" : "PRODUCT_DELETED",
+            active ? "상품 삭제 상태를 되돌렸습니다." : "상품을 삭제 상태로 저장했습니다.",
+            supplier: product.Supplier.Id, productId: product.Id, result: "SUCCESS");
         ProductChanged?.Invoke(product);
     }
     public void SetCategory(Product product, string category)
@@ -143,12 +156,17 @@ public sealed partial class SampleData
         if (!Categories.Skip(1).Contains(category)) return;
         string previous = product.Category; product.Category = category;
         try { Store.Database.SaveProduct(product); } catch { product.Category = previous; throw; }
+        Store.Log.Write(LogLevel.INFO, "PRODUCT_UPDATED", "상품 카테고리를 저장했습니다.",
+            supplier: product.Supplier.Id, productId: product.Id, result: "SUCCESS", reason: "CATEGORY_CHANGED");
         ProductChanged?.Invoke(product); CatalogChanged?.Invoke(); Notify();
     }
     public void SetManualImage(Product product, string? path)
     {
         string? previous = product.ManualImagePath; product.ManualImagePath = path;
         try { Store.Database.SaveProduct(product); } catch { product.ManualImagePath = previous; throw; }
+        Store.Log.Write(LogLevel.INFO, "PRODUCT_IMAGE_CHANGED",
+            path == null ? "수동 이미지를 해제하고 저장된 웹 이미지 사용으로 전환했습니다." : "수동 이미지 경로를 저장했습니다.",
+            supplier: product.Supplier.Id, productId: product.Id, result: "SUCCESS");
         ProductChanged?.Invoke(product); Notify();
     }
     public Product RegisterMock(string url, string category)
@@ -160,6 +178,8 @@ public sealed partial class SampleData
         var product = Store.Database.InsertProduct(new Product(0, source.Name, source.Price, source.PriceNote, seller, category, true, 0)
         { Url = url.Trim(), DisplayPrice = source.PriceText });
         Products.Add(product);
+        Store.Log.Write(LogLevel.INFO, "PRODUCT_REGISTERED", "상품 카드를 로컬 DB에 등록했습니다.",
+            supplier: seller.Id, productId: product.Id, result: "SUCCESS", reason: "MOCK_REGISTRATION");
         return product; // The same draft control adopts this record without refreshing or sorting the catalog.
     }
     internal Product RegisterMegaProduct(MegaCoffeeProductSnapshot snapshot, string category, string imagePath)
@@ -173,15 +193,30 @@ public sealed partial class SampleData
             ImageUrl = snapshot.ImageUrl, ImageCachePath = imagePath
         });
         Products.Add(product);
+        Store.Log.Write(LogLevel.INFO, "PRODUCT_REGISTERED", "실제 조회한 메가커피 상품을 로컬 DB에 등록했습니다.",
+            supplier: seller.Id, productId: product.Id, result: "SUCCESS", reason: "MEGA_LOOKUP");
         return product;
     }
     private IProductWorkbook Workbook() => new ClosedXmlProductWorkbook(Suppliers, Categories);
     public ProductTransferRow[] ExportRows() => Store.Database.ReadProducts(Suppliers)
         .Select(p => new ProductTransferRow(p.Id, p.Supplier.Name, p.Name, p.Price, p.PriceText, p.Category, p.Url, p.IsActive)).ToArray();
     internal int ExportWorkbook(string path)
-    { var rows = ExportRows(); Workbook().Export(path, rows); return rows.Length; }
+    {
+        try
+        {
+            var rows = ExportRows(); Workbook().Export(path, rows);
+            Store.Log.Write(LogLevel.INFO, "XLSX_EXPORT_SUCCESS", $"상품 {rows.Length}건을 XLSX로 내보냈습니다.", result: "SUCCESS");
+            return rows.Length;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        { Store.Log.Write(LogLevel.ERROR, "XLSX_EXPORT_FAILED", "상품 XLSX 내보내기에 실패했습니다.", result: "FAILED", error: ex); throw; }
+    }
     internal ProductImportPlan PrepareImport(string path)
-        => BuildImportPlan(Workbook().Import(path), null, null);
+    {
+        var plan = BuildImportPlan(SelectImportRows(Workbook().Import(path), false), null);
+        LogImportPreview(plan);
+        return plan;
+    }
     internal void ApplyImport(ProductImportPlan plan) => PublishImportedProducts(plan, WriteImport(plan));
     internal async Task ApplyImportAsync(ProductImportPlan plan)
     {
@@ -206,9 +241,15 @@ public sealed partial class SampleData
             }
             written = Store.Database.ApplyImport(plan.Changes);
         }
-        catch
+        catch (Exception ex)
         {
             foreach (string path in moved) if (File.Exists(path)) File.Delete(path);
+            var match = System.Text.RegularExpressions.Regex.Match(ex.Message, @"^(\d+)행");
+            if (match.Success && int.TryParse(match.Groups[1].Value, out int failedRow))
+                Store.Log.Write(LogLevel.ERROR, "XLSX_ROW_FAILED", "XLSX 행의 이미지 또는 DB 반영에 실패했습니다.",
+                    row: failedRow, result: "FAILED", reason: "APPLY_FAILED", error: ex);
+            Store.Log.Write(LogLevel.ERROR, "XLSX_IMPORT_FAILED", "상품 XLSX 변경에 실패해 반영을 완료하지 않았습니다.",
+                result: "FAILED", error: ex);
             throw;
         }
         return written;
@@ -216,6 +257,15 @@ public sealed partial class SampleData
     private void PublishImportedProducts(ProductImportPlan plan, IReadOnlyList<Product> written)
     {
         plan.Applied = true;
+        for (int index = 0; index < written.Count; index++)
+        {
+            var change = plan.Changes[index]; var product = written[index];
+            Store.Log.Write(LogLevel.INFO, change.Existing == null ? "XLSX_ROW_ADDED" : "XLSX_ROW_UPDATED",
+                change.Existing == null ? "XLSX 상품 행을 신규 등록했습니다." : "XLSX 상품 행으로 기존 상품을 수정했습니다.",
+                supplier: product.Supplier.Id, productId: product.Id, row: change.SheetRow, result: "SUCCESS");
+        }
+        Store.Log.Write(LogLevel.INFO, "XLSX_IMPORT_APPLIED",
+            $"XLSX 반영 완료: 추가 {plan.Added}건, 수정 {plan.Updated}건, 건너뜀 {plan.Skipped}건.", result: "SUCCESS");
         for (int index = 0; index < written.Count; index++)
         {
             var existing = plan.Changes[index].Existing; var product = written[index];

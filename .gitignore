@@ -32,7 +32,9 @@ backups/
 
 # Logs and diagnostics
 logs/
+Logs/
 *.log
+*.log.*
 diagnostics/
 *.zip
 

@@ -8,13 +8,13 @@ internal enum MegaProductLookupStatus { Success, InvalidUrl, LoginRequired, Fail
 internal sealed record MegaCoffeeProductSnapshot(string Name, decimal Price, string DisplayPrice,
     string ProductUrl, string ImageUrl, byte[] ImageBytes, bool Available);
 internal sealed record MegaProductLookupResult(MegaProductLookupStatus Status, MegaCoffeeProductSnapshot? Product = null,
-    string? Reason = null);
+    string? Reason = null, string? ErrorType = null);
 internal sealed record MegaCoffeePageProduct(string Name, decimal Price, string DisplayPrice,
     string ProductUrl, Uri ImageUri, bool Available);
 
 internal static class MegaCoffeeProductLookup
 {
-    private static readonly Regex GoodsQuery = new(@"^\?goodsNo=([0-9]{1,20})$", RegexOptions.CultureInvariant);
+    private static readonly Regex GoodsNumber = new(@"^[0-9]{1,20}$", RegexOptions.CultureInvariant);
     private static readonly Regex Money = new(@"^((?:[0-9]{1,3}(?:,[0-9]{3})+)|(?:[0-9]+))\s*원$", RegexOptions.CultureInvariant);
 
     internal static bool IsMegaHost(string text) => Uri.TryCreate(text.Trim(), UriKind.Absolute, out var uri) &&
@@ -24,12 +24,17 @@ internal static class MegaCoffeeProductLookup
     {
         uri = null; goodsNo = "";
         if (!Uri.TryCreate(text.Trim(), UriKind.Absolute, out var parsed) ||
-            parsed.Scheme != Uri.UriSchemeHttps || parsed.Host != "www.megacoffee.co.kr" ||
+            parsed.Scheme != Uri.UriSchemeHttps ||
+            parsed.Host is not ("www.megacoffee.co.kr" or "megacoffee.co.kr") ||
             !parsed.IsDefaultPort || parsed.UserInfo.Length != 0 || parsed.Fragment.Length != 0 ||
             parsed.AbsolutePath != "/goods/goods_view.php") return false;
-        var match = GoodsQuery.Match(parsed.Query);
-        if (!match.Success) return false;
-        uri = parsed; goodsNo = match.Groups[1].Value; return true;
+        var parts = parsed.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries);
+        var numbers = parts.Select(part => part.Split('=', 2))
+            .Where(pair => pair[0] == "goodsNo").ToArray();
+        if (numbers.Length != 1 || numbers[0].Length != 2 || !GoodsNumber.IsMatch(numbers[0][1])) return false;
+        goodsNo = numbers[0][1];
+        uri = new Uri($"https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo={goodsNo}");
+        return true;
     }
 
     internal static async Task<MegaCoffeePageProduct> ReadPageAsync(IPage page, string expectedGoodsNo)

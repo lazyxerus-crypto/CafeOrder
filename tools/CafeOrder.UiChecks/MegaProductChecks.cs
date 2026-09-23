@@ -10,12 +10,17 @@ internal static partial class Program
         Require(MegaCoffeeProductLookup.TryProductUrl(
             "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=79359", out _, out var code)
             && code == "79359", "Official MegaCoffee product URL accepted");
+        Require(MegaCoffeeProductLookup.TryProductUrl(
+            "https://megacoffee.co.kr/goods/goods_view.php?utm_source=x&goodsNo=79359&tracking=1",
+            out var clean, out var trackedCode) && trackedCode == code &&
+            clean!.ToString() == "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=79359",
+            "Tracking parameters and host variants normalize to one product URL");
         foreach (string invalid in new[]
         {
             "http://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=79359",
             "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=abc",
-            "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=79359&extra=1",
-            "https://megacoffee.co.kr/goods/goods_view.php?goodsNo=79359"
+            "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=79359&goodsNo=1",
+            "https://notmegacoffee.co.kr/goods/goods_view.php?goodsNo=79359"
         }) Require(!MegaCoffeeProductLookup.TryProductUrl(invalid, out _, out _), "Invalid product URL rejected");
 
         using var playwright = await Playwright.CreateAsync();

@@ -1,15 +1,34 @@
 namespace CafeOrder;
 
+internal static class ProductUrlIdentity
+{
+    internal static string? Key(string supplierId, string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        if (supplierId == "mega" && MegaCoffeeProductLookup.TryProductUrl(url, out _, out var goodsNo))
+            return "mega|" + (goodsNo.TrimStart('0') is { Length: > 0 } normalized ? normalized : "0");
+        return Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            ? supplierId + "|" + uri.AbsoluteUri : supplierId + "|" + url.Trim();
+    }
+}
+
 public sealed partial class SampleData
 {
     private sealed record ResolvedImport(MegaCoffeeProductSnapshot Product, string PendingPath, string FinalPath);
+    private sealed record ImportSelection(ProductWorkbookRead Read, List<ProductWorkbookIssue> Issues,
+        List<ProductImportSkip> Skipped);
 
     internal async Task<ProductImportPlan> PrepareImportAsync(string path,
         Func<string, Task<MegaProductLookupResult>> lookup, IProgress<string>? progress, CancellationToken cancellationToken)
     {
-        var read = await Task.Run(() => Workbook().Import(path), cancellationToken);
-        var issues = ValidateImportRows(read, true);
-        if (issues.Count != 0) return new([], issues);
+        var selection = SelectImportRows(await Task.Run(() => Workbook().Import(path), cancellationToken), true);
+        var read = selection.Read;
+        var issues = selection.Issues;
+        if (issues.Count != 0)
+        {
+            var rejected = new ProductImportPlan([], issues, selection.Skipped);
+            LogImportPreview(rejected); return rejected;
+        }
         var resolved = new Dictionary<int, ResolvedImport>();
         bool transferred = false;
         try
@@ -21,9 +40,15 @@ public sealed partial class SampleData
                 var row = linked[index];
                 progress?.Report($"상품 조회 {index + 1}/{linked.Length} · {row.SheetRow}행");
                 MegaProductLookupResult result;
-                try { result = await lookup(row.ProductUrl).WaitAsync(cancellationToken); }
+                MegaCoffeeProductLookup.TryProductUrl(row.ProductUrl, out var cleanUrl, out _);
+                try { result = await lookup(cleanUrl!.ToString()).WaitAsync(cancellationToken); }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception) { result = new(MegaProductLookupStatus.Failed); }
+                catch (Exception ex)
+                {
+                    Store.Log.Write(LogLevel.ERROR, "PRODUCT_LOOKUP_EXCEPTION", "XLSX 상품조회 호출에 실패했습니다.",
+                        supplier: "mega", row: row.SheetRow, result: "FAILED", error: ex);
+                    result = new(MegaProductLookupStatus.Failed);
+                }
                 if (result.Status != MegaProductLookupStatus.Success || result.Product == null)
                 {
                     string reason = result.Status switch
@@ -44,14 +69,21 @@ public sealed partial class SampleData
                 }
                 catch (OperationCanceledException)
                 { if (File.Exists(pending)) File.Delete(pending); throw; }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     if (File.Exists(pending)) File.Delete(pending);
+                    Store.Log.Write(LogLevel.ERROR, "IMAGE_SAVE_FAILED", "XLSX 조회 이미지를 WebP로 저장하지 못했습니다.",
+                        supplier: "mega", row: row.SheetRow, result: "FAILED", error: ex);
                     issues.Add(new(row.SheetRow, "이미지", "상품 이미지를 저장할 수 없습니다."));
                 }
             }
-            if (issues.Count != 0) return new([], issues);
-            var plan = BuildImportPlan(read, resolved, issues);
+            if (issues.Count != 0)
+            {
+                var rejected = new ProductImportPlan([], issues, selection.Skipped);
+                LogImportPreview(rejected); return rejected;
+            }
+            var plan = BuildImportPlan(selection, resolved);
+            LogImportPreview(plan);
             transferred = true;
             return plan;
         }
@@ -64,47 +96,76 @@ public sealed partial class SampleData
         }
     }
 
-    private List<ProductWorkbookIssue> ValidateImportRows(ProductWorkbookRead read, bool allowLookup)
+    private void LogImportPreview(ProductImportPlan plan)
+    {
+        foreach (var skip in plan.SkippedRows)
+            Store.Log.Write(LogLevel.INFO, "XLSX_ROW_SKIPPED", "중복 상품 URL 행을 조회와 DB 반영에서 건너뛰었습니다.",
+                row: skip.SheetRow, result: "SKIPPED", reason: skip.Reason);
+        foreach (var issue in plan.Issues)
+            Store.Log.Write(LogLevel.WARN, "XLSX_ROW_FAILED", $"{issue.Column} 열: {issue.Reason}",
+                row: issue.Row, result: "FAILED", reason: issue.Column.ToUpperInvariant());
+        Store.Log.Write(plan.Issues.Count == 0 ? LogLevel.INFO : LogLevel.WARN, "XLSX_IMPORT_PREPARED",
+            $"XLSX 검증 결과: 추가 {plan.Added}건, 수정 {plan.Updated}건, 건너뜀 {plan.Skipped}건, 실패 {plan.Failed}건.",
+            result: plan.Issues.Count == 0 ? "READY" : "FAILED");
+    }
+
+    private ImportSelection SelectImportRows(ProductWorkbookRead read, bool allowLookup)
     {
         var issues = read.Issues.ToList();
         var known = Products.ToDictionary(product => product.Id);
+        var stored = Store.Database.ReadProducts(Suppliers);
         var seenIds = new HashSet<int>();
-        var seenUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var firstByUrl = new Dictionary<string, ProductTransferRow>(StringComparer.OrdinalIgnoreCase);
+        var selected = new List<ProductTransferRow>();
+        var skipped = new List<ProductImportSkip>();
         foreach (var row in read.Rows)
         {
             if (row.ProductId is int id)
             {
-                if (!seenIds.Add(id)) issues.Add(new(row.SheetRow, "ProductId", "파일에서 중복된 상품 ID입니다."));
-                else if (!known.ContainsKey(id)) issues.Add(new(row.SheetRow, "ProductId", "존재하지 않는 상품 ID입니다."));
+                if (!seenIds.Add(id)) { issues.Add(new(row.SheetRow, "ProductId", "파일에서 중복된 상품 ID입니다.")); continue; }
+                if (!known.ContainsKey(id)) { issues.Add(new(row.SheetRow, "ProductId", "존재하지 않는 상품 ID입니다.")); continue; }
             }
-            if (row.ProductUrl.Length != 0)
-            {
-                string key = CanonicalUrl(row.ProductUrl);
-                if (!seenUrls.Add(key)) issues.Add(new(row.SheetRow, "ProductUrl", "파일에서 중복된 상품 URL입니다."));
-            }
-            if (!row.LookupRequested) continue;
-            if (!allowLookup) { issues.Add(new(row.SheetRow, "ProductUrl", "이 행은 로그인된 상품조회가 필요합니다.")); continue; }
-            if (!MegaCoffeeProductLookup.TryProductUrl(row.ProductUrl, out _, out _))
+            if (row.LookupRequested && !allowLookup)
+            { issues.Add(new(row.SheetRow, "ProductUrl", "이 행은 로그인된 상품조회가 필요합니다.")); continue; }
+            if (row.LookupRequested && !MegaCoffeeProductLookup.TryProductUrl(row.ProductUrl, out _, out _))
             {
                 string reason = MegaCoffeeProductLookup.IsMegaHost(row.ProductUrl)
                     ? "메가커피 상품 URL 형식이 올바르지 않습니다."
                     : "이 판매처의 URL 조회는 아직 지원하지 않습니다.";
                 issues.Add(new(row.SheetRow, "ProductUrl", reason)); continue;
             }
-            var matching = Products.Where(product => CanonicalUrl(product.Url) == CanonicalUrl(row.ProductUrl)).ToArray();
-            if (row.ProductId == null && matching.Length != 0)
-                issues.Add(new(row.SheetRow, "ProductUrl", "이미 등록된 URL입니다. 기존 ProductId를 지정해주세요."));
-            else if (row.ProductId is int own && matching.Any(product => product.Id != own))
-                issues.Add(new(row.SheetRow, "ProductUrl", "다른 ProductId에 이미 등록된 URL입니다."));
+            string supplierId = row.LookupRequested ? "mega" : Suppliers.First(supplier =>
+                supplier.Name == row.Supplier || string.Equals(supplier.Id, row.Supplier, StringComparison.OrdinalIgnoreCase)).Id;
+            string? key = ProductUrlIdentity.Key(supplierId, row.ProductUrl);
+            if (key == null) { selected.Add(row); continue; }
+            bool storedByOther = stored.Any(product =>
+                ProductUrlIdentity.Key(product.Supplier.Id, product.Url)?.Equals(key, StringComparison.OrdinalIgnoreCase) == true &&
+                product.Id != row.ProductId);
+            if (row.ProductId == null && storedByOther)
+            { skipped.Add(new(row.SheetRow, "DB_DUPLICATE_PRODUCT_URL")); continue; }
+            if (row.ProductId != null && storedByOther)
+            { issues.Add(new(row.SheetRow, "ProductUrl", "다른 ProductId에 이미 등록된 상품 URL입니다.")); continue; }
+            if (!firstByUrl.TryGetValue(key, out var first))
+            { firstByUrl.Add(key, row); selected.Add(row); continue; }
+            if (row.ProductId == null)
+            { skipped.Add(new(row.SheetRow, "FILE_DUPLICATE_PRODUCT_URL")); continue; }
+            if (first.ProductId == null)
+            {
+                selected.Remove(first);
+                skipped.Add(new(first.SheetRow, "FILE_DUPLICATE_PRODUCT_URL"));
+                firstByUrl[key] = row; selected.Add(row); continue;
+            }
+            issues.Add(new(row.SheetRow, "ProductUrl", "서로 다른 ProductId가 같은 상품 URL을 수정하려 합니다."));
         }
-        return issues;
+        return new(new(selected, read.Issues), issues, skipped);
     }
 
-    private ProductImportPlan BuildImportPlan(ProductWorkbookRead read,
-        IReadOnlyDictionary<int, ResolvedImport>? resolved, List<ProductWorkbookIssue>? validated)
+    private ProductImportPlan BuildImportPlan(ImportSelection selection,
+        IReadOnlyDictionary<int, ResolvedImport>? resolved)
     {
-        var issues = validated ?? ValidateImportRows(read, false);
-        if (issues.Count != 0) return new([], issues);
+        var issues = selection.Issues;
+        if (issues.Count != 0) return new([], issues, selection.Skipped);
+        var read = selection.Read;
         var known = Products.ToDictionary(product => product.Id);
         var stored = Store.Database.ReadProducts(Suppliers).Select(product => product.Id).ToHashSet();
         var changes = new List<ProductImportChange>();
@@ -145,11 +206,8 @@ public sealed partial class SampleData
             }
             changes.Add(new(existing, proposed, existing != null && stored.Contains(existing.Id), row.SheetRow, pending));
         }
-        return new(changes, issues);
+        return new(changes, issues, selection.Skipped);
     }
-
-    private static string CanonicalUrl(string text) => Uri.TryCreate(text, UriKind.Absolute, out var uri)
-        ? uri.AbsoluteUri : text.Trim();
 
     internal static string InferCategory(string name)
     {

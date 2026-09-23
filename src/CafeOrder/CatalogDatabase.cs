@@ -7,12 +7,16 @@ namespace CafeOrder;
 internal sealed class CatalogDatabase
 {
     internal string Path { get; }
-    internal CatalogDatabase(string path) => Path = System.IO.Path.GetFullPath(path);
+    private readonly OperationalLog log;
+    internal CatalogDatabase(string path, OperationalLog log)
+    { Path = System.IO.Path.GetFullPath(path); this.log = log; }
     internal SqliteConnection Connect()
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         { DataSource = Path, ForeignKeys = true, Pooling = false, DefaultTimeout = 5 }.ToString());
-        try { connection.Open(); return connection; } catch { connection.Dispose(); throw; }
+        try { connection.Open(); return connection; }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
+        { connection.Dispose(); log.Write(LogLevel.ERROR, "DB_OPEN_FAILED", "SQLite 파일을 열지 못했습니다.", error: ex); throw; }
     }
     private static SqliteCommand Command(SqliteConnection db, SqliteTransaction? tx, string sql, params (string Name, object? Value)[] values)
     {
@@ -27,10 +31,18 @@ internal sealed class CatalogDatabase
     private T Access<T>(Func<SqliteConnection, T> action)
     {
         try { using var db = Connect(); return action(db); }
-        catch (SqliteException ex) { throw new IOException("SQLite 저장소를 읽거나 저장하지 못했습니다. 기존 데이터는 초기화하지 않았습니다.", ex); }
+        catch (SqliteException ex)
+        {
+            log.Write(LogLevel.ERROR, "DB_ACCESS_FAILED", "SQLite 읽기 또는 쓰기가 실패했습니다.", error: ex);
+            throw new IOException("SQLite 저장소를 읽거나 저장하지 못했습니다. 기존 데이터는 초기화하지 않았습니다.", ex);
+        }
     }
-    private T Write<T>(Func<SqliteConnection, SqliteTransaction, T> action) => Access(db =>
-    { using var tx = db.BeginTransaction(); var result = action(db, tx); tx.Commit(); return result; });
+    private T Write<T>(Func<SqliteConnection, SqliteTransaction, T> action)
+    {
+        try { return Access(db => { using var tx = db.BeginTransaction(); var result = action(db, tx); tx.Commit(); return result; }); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        { log.Write(LogLevel.ERROR, "DB_SAVE_FAILED", "SQLite 변경을 저장하지 못했습니다.", error: ex); throw; }
+    }
 
     internal void Initialize(LocalState legacy, IReadOnlyList<Supplier> suppliers, IReadOnlyList<Product> samples)
     {
@@ -67,6 +79,7 @@ internal sealed class CatalogDatabase
                         INSERT INTO SchemaMigrations VALUES(1,'catalog-cart-schema',strftime('%Y-%m-%dT%H:%M:%fZ','now'));
                         """);
                     tx.Commit(); version = 1;
+                    log.Write(LogLevel.INFO, "DB_MIGRATION_APPLIED", "상품·장바구니 테이블을 생성했습니다.", result: "APPLIED", reason: "SCHEMA_1");
                 }
                 if (version == 1)
                 {
@@ -99,18 +112,28 @@ internal sealed class CatalogDatabase
                     foreach (var product in imported) Save(db, tx, product);
                     Execute(db, tx, "INSERT INTO SchemaMigrations VALUES(2,'legacy-import-once',strftime('%Y-%m-%dT%H:%M:%fZ','now'))");
                     tx.Commit();
+                    log.Write(LogLevel.INFO, "DB_MIGRATION_APPLIED", "기존 상품 자료 전환을 완료했습니다.", result: "APPLIED", reason: "LEGACY_2");
                 }
                 return 0;
             });
+            log.Write(LogLevel.INFO, "DB_OPENED", "SQLite 상품·장바구니 저장소를 열었습니다.", result: "SUCCESS");
         }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        { log.Write(LogLevel.ERROR, "DB_INITIALIZE_FAILED", "SQLite 초기화 또는 마이그레이션에 실패했습니다.", error: ex); throw; }
         finally { if (entered) gate.ReleaseMutex(); }
     }
     private void Backup(SqliteConnection source, string reason)
     {
-        string directory = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(Path)!, "backups"); Directory.CreateDirectory(directory);
-        string destination = System.IO.Path.Combine(directory, $"CafeOrder-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{reason}-{Guid.NewGuid():N}.db");
-        using var backup = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = destination, Pooling = false }.ToString());
-        backup.Open(); source.BackupDatabase(backup);
+        try
+        {
+            string directory = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(Path)!, "backups"); Directory.CreateDirectory(directory);
+            string destination = System.IO.Path.Combine(directory, $"CafeOrder-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{reason}-{Guid.NewGuid():N}.db");
+            using var backup = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = destination, Pooling = false }.ToString());
+            backup.Open(); source.BackupDatabase(backup);
+            log.Write(LogLevel.INFO, "DB_BACKUP_CREATED", "SQLite 변경 전 백업을 완료했습니다.", result: "SUCCESS", reason: reason);
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
+        { log.Write(LogLevel.ERROR, "DB_BACKUP_FAILED", "SQLite 변경 전 백업을 완료하지 못했습니다.", result: "FAILED", reason: reason, error: ex); throw; }
     }
     private static void Save(SqliteConnection db, SqliteTransaction tx, Product p) => Execute(db, tx, """
         INSERT INTO Products VALUES($id,$supplier,$name,$price,$note,$display,$category,$url,$image,$cache,$manual,$available,$active,$origin)
@@ -139,13 +162,16 @@ internal sealed class CatalogDatabase
             foreach (var change in changes)
             {
                 Product product = change.Proposed;
-                if (change.PendingImagePath != null)
+                string? key = ProductUrlIdentity.Key(product.Supplier.Id, product.Url);
+                if (key != null)
                 {
-                    using var duplicate = Command(db, tx,
-                        "SELECT COUNT(*) FROM Products WHERE ProductUrl=$url COLLATE NOCASE AND ProductId<>$id",
-                        ("$url", product.Url), ("$id", change.Existing?.Id ?? 0));
-                    if (Convert.ToInt64(duplicate.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
-                        throw new InvalidDataException($"{change.SheetRow}행 · ProductUrl: 확인 이후 같은 URL이 등록됐습니다. 다시 가져오세요.");
+                    using var duplicate = Command(db, tx, "SELECT ProductId,SupplierId,ProductUrl FROM Products WHERE ProductUrl<>''");
+                    using var reader = duplicate.ExecuteReader();
+                    while (reader.Read())
+                        if (reader.GetInt32(0) != (change.Existing?.Id ?? 0) &&
+                            string.Equals(ProductUrlIdentity.Key(reader.GetString(1), reader.GetString(2)),
+                                key, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException($"{change.SheetRow}행 · ProductUrl: 확인 이후 같은 상품 URL이 등록됐습니다. 다시 가져오세요.");
                 }
                 if (change.Existing is { } existing)
                 {

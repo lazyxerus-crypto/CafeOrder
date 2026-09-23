@@ -10,10 +10,11 @@ internal static partial class Program
         internal string? ExportPath, ImportPath;
         internal ProductImportPlan? Preview;
         internal bool AllowApply = true;
+        internal int ConfirmCalls;
         internal readonly List<string> Messages = [];
         public string? ChooseExport(IWin32Window owner) => ExportPath;
         public string? ChooseImport(IWin32Window owner) => ImportPath;
-        public bool Confirm(IWin32Window owner, ProductImportPlan plan) { Preview = plan; return AllowApply; }
+        public bool Confirm(IWin32Window owner, ProductImportPlan plan) { ConfirmCalls++; Preview = plan; return AllowApply; }
         public void Show(IWin32Window owner, string message, bool error) => Messages.Add(message);
         public void ShowIssues(IWin32Window owner, ProductImportPlan plan) =>
             Messages.Add($"추가 {plan.Added} 수정 {plan.Updated} 실패 {plan.Failed} · " + string.Join("; ", plan.Issues));
@@ -56,11 +57,17 @@ internal static partial class Program
         data.ApplyImport(same);
         string[] BeforeBackups() => Directory.GetFiles(Path.Combine(dir, "Data", "backups"), "*before-xlsx-import*.db");
         Require(BeforeBackups().Length == 0, "No backup needed for unchanged roundtrip");
+        string duplicateFull = MakeWorkbook(dir, "duplicate-complete", sheet =>
+            WriteProductRow(sheet, 2, null, "메가커피", registered.Name, 1000, "1,000원", "기타", registered.Url, true));
+        using (var skipped = data.PrepareImport(duplicateFull))
+            Require(skipped.Issues.Count == 0 && skipped.Skipped == 1 && skipped.Changes.Count == 0,
+                "Complete duplicate URL skips without web lookup or DB change");
 
+        const string uniqueUrl = "https://megacoffee.example.invalid/product/new-26";
         string changed = MakeWorkbook(dir, "changed", sheet =>
         {
             WriteProductRow(sheet, 2, 7, "푸드레인", "변경된 원두", 42000, "42,000원 특가", "유제품", "", false);
-            WriteProductRow(sheet, 3, null, "메가커피", registered.Name, 0, "", "기타", registered.Url, true);
+            WriteProductRow(sheet, 3, null, "메가커피", registered.Name, 0, "", "기타", uniqueUrl, true);
         });
         var plan = data.PrepareImport(changed);
         Require(plan.Issues.Count == 0 && plan.Added == 1 && plan.Updated == 1 && plan.Deactivated == 1,
@@ -71,7 +78,7 @@ internal static partial class Program
             sample.PriceText == "42,000원 특가" && sample.Supplier.Id == "food" && sample.Category == "유제품" &&
             sample.Url == "" && !sample.IsActive && sample.ManualImagePath == image && sample.DataOrigin == "Sample",
             "Existing ID and internal image/origin preserved with live cart reference");
-        Require(data.Products.Single(p => p.Id == 26).Name == registered.Name && data.Products.Single(p => p.Id == 26).Url == registered.Url &&
+        Require(data.Products.Single(p => p.Id == 26).Name == registered.Name && data.Products.Single(p => p.Id == 26).Url == uniqueUrl &&
             data.Products.Single(p => p.Id == 25).IsActive == false, "Blank ID creates a distinct product; omitted product stays stored");
         Require(BeforeBackups().Length == 1, "Backup created immediately before import");
         using (var db = new SqliteConnection($"Data Source={BeforeBackups().Single()}"))
@@ -187,6 +194,19 @@ internal static partial class Program
         var linkedImage = Find<PictureBox>(main, $"CartImage_{linkedProduct.Id}");
         using (var copy = new Bitmap(linkedImage.Image!))
             Require(copy.GetPixel(copy.Width / 2, copy.Height / 2).B > 100, "Imported image appears in cart immediately");
+
+        string duplicateOnly = MakeWorkbook(data.Store.DirectoryPath, "ui-duplicate-only",
+            sheet => sheet.Cell(2, 7).Value = linkedUrl + "&utm_source=repeat");
+        int beforeDuplicateCount = data.Store.Database.ReadProducts(data.Suppliers).Count;
+        int beforeDuplicateConfirm = dialogs.ConfirmCalls;
+        view.MegaLookup = _ => throw new Exception("Duplicate URL must not start a lookup");
+        dialogs.ImportPath = duplicateOnly;
+        Find<Button>(main, "ImportProducts").PerformClick();
+        await WaitFor(() => !view.importing && dialogs.Messages.LastOrDefault()?.Contains("건너뜀 1개") == true);
+        Require(dialogs.ConfirmCalls == beforeDuplicateConfirm &&
+            data.Store.Database.ReadProducts(data.Suppliers).Count == beforeDuplicateCount &&
+            dialogs.Messages.Last().Contains("DB 변경 없음"),
+            "Duplicate-only XLSX completes without lookup, confirmation, or DB write");
 
         const string cancelUrl = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000027811";
         string cancelFile = MakeWorkbook(data.Store.DirectoryPath, "ui-cancel", sheet => sheet.Cell(2, 7).Value = cancelUrl);

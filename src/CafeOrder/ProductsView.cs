@@ -158,15 +158,35 @@ public sealed class ProductsView : UserControl
                 dialogs.ShowIssues(owner, plan);
                 return;
             }
+            if (plan.Changes.Count == 0)
+            {
+                progress.Finish();
+                data.Store.Log.Write(LogLevel.INFO, "XLSX_IMPORT_NO_CHANGES", "가져올 변경이 없어 DB를 수정하지 않았습니다.",
+                    result: "SKIPPED");
+                dialogs.Show(owner, $"가져오기 완료 · 추가 0개, 수정 0개, 건너뜀 {plan.Skipped}개, 실패 0개 · DB 변경 없음", false);
+                return;
+            }
             progress.Hide();
-            if (!dialogs.Confirm(owner, plan)) return;
+            if (!dialogs.Confirm(owner, plan))
+            {
+                data.Store.Log.Write(LogLevel.INFO, "XLSX_IMPORT_CANCELLED", "사용자가 XLSX 적용을 취소했습니다.", result: "CANCELLED");
+                return;
+            }
             progress.SetApplying(); progress.Show(FindForm());
             await data.ApplyImportAsync(plan);
             if (IsDisposed) return;
-            dialogs.Show(owner, $"가져오기 완료 · 추가 {plan.Added}개, 수정 {plan.Updated}개, 비활성 변경 {plan.Deactivated}개", false);
+            dialogs.Show(owner, $"가져오기 완료 · 추가 {plan.Added}개, 수정 {plan.Updated}개, 건너뜀 {plan.Skipped}개, 실패 0개, 비활성 변경 {plan.Deactivated}개", false);
         }
-        catch (OperationCanceledException) { if (!IsDisposed) dialogs.Show(owner, "가져오기 취소 · DB 변경 없음", false); }
-        catch (Exception ex) when (ex is not OutOfMemoryException) { dialogs.Show(owner, "가져오기 실패 · DB 반영을 완료하지 않았습니다.\n" + ex.Message, true); }
+        catch (OperationCanceledException)
+        {
+            data.Store.Log.Write(LogLevel.INFO, "XLSX_IMPORT_CANCELLED", "상품조회 또는 파일 검증 중 가져오기를 취소했습니다.", result: "CANCELLED");
+            if (!IsDisposed) dialogs.Show(owner, "가져오기 취소 · DB 변경 없음", false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            data.Store.Log.Write(LogLevel.ERROR, "XLSX_IMPORT_FAILED", "XLSX 가져오기 중 파일·조회·DB 처리에 실패했습니다.", result: "FAILED", error: ex);
+            dialogs.Show(owner, "가져오기 실패 · DB 반영을 완료하지 않았습니다.\n" + ex.Message, true);
+        }
         finally { progress.Finish(); importing = false; }
     }
     private void ProductChanged(Product _) => UpdateCount();

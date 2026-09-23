@@ -103,6 +103,7 @@ public sealed class ProductCard : Panel
         string requestedUrl = url.Text.Trim();
         url.Enabled = false; feedback = "조회 중"; Invalidate();
         string? imagePath = null;
+        bool lookupSucceeded = false, imageSaved = false;
         try
         {
             var result = await megaLookup(requestedUrl);
@@ -117,8 +118,10 @@ public sealed class ProductCard : Panel
                 };
                 return;
             }
+            lookupSucceeded = true;
             imagePath = data.Store.NewWebImagePath();
             await Task.Run(() => ManualImages.Save(result.Product.ImageBytes, imagePath));
+            imageSaved = true;
             if (IsDisposed || url == null) return;
             void Register()
             {
@@ -131,7 +134,13 @@ public sealed class ProductCard : Panel
             feedback = "";
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
-        { feedback = "상품 저장에 실패했습니다. 다시 시도해주세요"; }
+        {
+            data.Store.Log.Write(LogLevel.ERROR,
+                !lookupSucceeded ? "PRODUCT_LOOKUP_EXCEPTION" : imageSaved ? "PRODUCT_SAVE_FAILED" : "IMAGE_SAVE_FAILED",
+                !lookupSucceeded ? "상품조회 도중 예외가 발생했습니다." : imageSaved ? "조회한 상품을 DB에 등록하지 못했습니다." : "조회한 상품 이미지를 WebP로 저장하지 못했습니다.",
+                supplier: "mega", result: "FAILED", error: ex);
+            feedback = "상품 저장에 실패했습니다. 다시 시도해주세요";
+        }
         finally
         {
             if (imagePath != null) { try { File.Delete(imagePath); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
@@ -258,8 +267,16 @@ public sealed class ProductCard : Panel
     {
         if (Product is not { IsActive: true }) return;
         string path = data.Store.NewManualImagePath(Product.Id);
-        try { ManualImages.Save(source, path); data.SetManualImage(Product, path); }
-        catch { if (File.Exists(path)) File.Delete(path); throw; }
+        bool converted = false;
+        try { ManualImages.Save(source, path); converted = true; data.SetManualImage(Product, path); }
+        catch (Exception ex)
+        {
+            if (File.Exists(path)) File.Delete(path);
+            data.Store.Log.Write(LogLevel.ERROR, converted ? "PRODUCT_IMAGE_LINK_FAILED" : "IMAGE_SAVE_FAILED",
+                converted ? "수동 이미지 경로를 DB에 저장하지 못했습니다." : "수동 이미지를 변환하거나 저장하지 못했습니다.",
+                supplier: Product.Supplier.Id, productId: Product.Id, result: "FAILED", error: ex);
+            throw;
+        }
         Invalidate();
     }
     internal void RemoveManual()

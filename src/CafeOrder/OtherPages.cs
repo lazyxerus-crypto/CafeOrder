@@ -91,9 +91,40 @@ internal static class OtherPages
     public static Control Logs(SampleData data)
     {
         var log = new RichTextBox { Name = "LogText", Dock = DockStyle.Fill, ReadOnly = true, BorderStyle = BorderStyle.None,
-            BackColor = Color.White, ForeColor = Ui.Ink, DetectUrls = false, ShortcutsEnabled = true,
-            Text = "2026-09-15 02:31:00 [INFO] APP: UI 목업 시작\n2026-09-15 02:31:01 [INFO] PRODUCTS: 샘플 상품 24개 준비\n2026-09-15 02:32:00 [INFO] CART: 수량 변경 반영\n2026-09-15 02:33:00 [WARN] ORDER: 주문 결과 확인 필요 (예시)" };
+            BackColor = Color.White, ForeColor = Ui.Ink, DetectUrls = false, ShortcutsEnabled = true };
         Ui.Role(log, TypographyKey.Log);
+        var queued = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var refresh = new System.Windows.Forms.Timer { Interval = 200 };
+        bool loaded = false, loading = false, firstDrain = true;
+        HashSet<string> initialLines = [];
+        void Received(string entry) => queued.Enqueue(entry);
+        data.Store.Log.EntryAdded += Received;
+        refresh.Tick += (_, _) =>
+        {
+            if (!loaded || log.IsDisposed) return;
+            var batch = new System.Text.StringBuilder();
+            while (queued.TryDequeue(out var entry))
+                if (!firstDrain || !initialLines.Contains(entry)) batch.AppendLine(entry);
+            firstDrain = false; initialLines.Clear();
+            if (batch.Length == 0) return;
+            log.AppendText(batch.ToString());
+            if (log.TextLength > 250_000)
+            {
+                int cut = log.Text.IndexOf('\n', log.TextLength - 250_000);
+                log.Text = cut < 0 ? log.Text[^250_000..] : log.Text[(cut + 1)..];
+            }
+        };
+        log.HandleCreated += async (_, _) =>
+        {
+            if (loading || loaded) return;
+            loading = true;
+            string history = await data.Store.Log.ReadRecentAsync();
+            if (log.IsDisposed) return;
+            log.Text = history;
+            initialLines = history.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.TrimEnd('\r')).ToHashSet();
+            loaded = true; refresh.Start();
+        };
         var copy = Ui.Button("전체 복사", () => { }, name: "CopyAllLogs");
         copy.Click += (_, _) =>
         {
@@ -101,7 +132,9 @@ internal static class OtherPages
             catch (System.Runtime.InteropServices.ExternalException) { copy.Text = "복사 실패 · 다시 시도"; }
         };
         var toolbar = Ui.Row(copy); toolbar.Dock = DockStyle.Top;
-        var panel = new SoftPanel { Dock = DockStyle.Fill }; panel.Controls.Add(log); panel.Controls.Add(toolbar); return panel;
+        var panel = new SoftPanel { Dock = DockStyle.Fill };
+        panel.Disposed += (_, _) => { data.Store.Log.EntryAdded -= Received; refresh.Dispose(); };
+        panel.Controls.Add(log); panel.Controls.Add(toolbar); return panel;
     }
     public static Control Settings(SampleData data, Action openTypography)
     {
