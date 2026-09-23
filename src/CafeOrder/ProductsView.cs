@@ -106,13 +106,14 @@ public sealed class ProductsView : UserControl
         supplier.SelectedIndexChanged += (_, _) => FilterProducts();
         data.CartChanged += SyncCart;
         data.ProductAdded += BringSellerFirst;
+        data.FirstMegaCartAdded += FirstMegaCartAdded;
         data.CatalogChanged += CatalogChanged; data.ProductChanged += ProductChanged;
         emphasis.Tick += (_, _) => { emphasis.Stop(); if (highlighted is { IsDisposed: false }) highlighted.Highlight(false); highlighted = null; };
         ApplyColumns(); FilterProducts(); SyncCart();
     }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { data.CartChanged -= SyncCart; data.ProductAdded -= BringSellerFirst; data.CatalogChanged -= CatalogChanged; data.ProductChanged -= ProductChanged; emphasis.Dispose(); emptyCart.Dispose(); }
+        if (disposing) { data.CartChanged -= SyncCart; data.ProductAdded -= BringSellerFirst; data.FirstMegaCartAdded -= FirstMegaCartAdded; data.CatalogChanged -= CatalogChanged; data.ProductChanged -= ProductChanged; emphasis.Dispose(); emptyCart.Dispose(); }
         base.Dispose(disposing);
     }
     public void ApplyColumns() { products.Columns = data.Store.Preferences.Columns; foreach (var button in columnButtons) button.Selected = button.Columns == products.Columns; products.PerformLayout(); }
@@ -163,7 +164,7 @@ public sealed class ProductsView : UserControl
                 progress.Finish();
                 data.Store.Log.Write(LogLevel.INFO, "XLSX_IMPORT_NO_CHANGES", "가져올 변경이 없어 DB를 수정하지 않았습니다.",
                     result: "SKIPPED");
-                dialogs.Show(owner, $"가져오기 완료 · 추가 0개, 수정 0개, 건너뜀 {plan.Skipped}개, 실패 0개 · DB 변경 없음", false);
+                dialogs.Show(owner, $"가져오기 완료 · 추가 0개, 수정 0개, 건너뜀 {plan.Skipped}개, 실패 0개 · DB 변경 없음{plan.DuplicateDetails}", false);
                 return;
             }
             progress.Hide();
@@ -175,7 +176,7 @@ public sealed class ProductsView : UserControl
             progress.SetApplying(); progress.Show(FindForm());
             await data.ApplyImportAsync(plan);
             if (IsDisposed) return;
-            dialogs.Show(owner, $"가져오기 완료 · 추가 {plan.Added}개, 수정 {plan.Updated}개, 건너뜀 {plan.Skipped}개, 실패 0개, 비활성 변경 {plan.Deactivated}개", false);
+            dialogs.Show(owner, $"가져오기 완료 · 추가 {plan.Added}개, 수정 {plan.Updated}개, 건너뜀 {plan.Skipped}개, 실패 0개, 비활성 변경 {plan.Deactivated}개{plan.DuplicateDetails}", false);
         }
         catch (OperationCanceledException)
         {
@@ -208,6 +209,10 @@ public sealed class ProductsView : UserControl
         cart.Controls.SetChildIndex(card, 0); cart.PerformLayout(); cart.AutoScrollPosition = Point.Empty;
         highlighted = card.Row(product.Id); highlighted.Highlight(true); emphasis.Stop(); emphasis.Start();
     }
+    private void FirstMegaCartAdded(Product product, CartLine line)
+    {
+        if (MegaLookup is { } lookup) _ = data.RefreshFirstMegaCartAsync(product, line, lookup);
+    }
     private void SyncCart()
     {
         // Keep each supplier and row alive. Quantity-only changes do not touch the control tree.
@@ -225,13 +230,13 @@ public sealed class ProductsView : UserControl
         }
         if (groups.Length == 0 && emptyCart.Parent == null) cart.Controls.Add(emptyCart);
         else if (groups.Length != 0 && emptyCart.Parent != null) cart.Controls.Remove(emptyCart);
-        orderAll.Enabled = data.Cart.Count != 0;
+        orderAll.Enabled = data.Cart.Count != 0 && data.Cart.All(data.CanStartLocalOrder);
     }
     internal static void AddRow(TableLayoutPanel card, Control control)
     { card.RowStyles.Add(new RowStyle(SizeType.AutoSize)); card.Controls.Add(control, 0, card.RowCount++); }
     private void OpenOrders(CartLine[] lines)
     {
-        if (lines.Length == 0) return;
+        if (lines.Length == 0 || lines.Any(line => !data.CanStartLocalOrder(line))) return;
         using var dialog = new OrderForm(data, lines); dialog.ShowDialog(FindForm());
     }
 }

@@ -96,18 +96,24 @@ public sealed class OrderForm : Form
         }
         UpdateActions();
     }
-    private bool Eligible(OrderCard card) => card.State == "PENDING" && data.Shortfall(card.Supplier, card.Lines) == 0;
+    private bool Eligible(OrderCard card) => card.State == "PENDING" && data.Shortfall(card.Supplier, card.Lines) == 0 &&
+        card.Lines.All(data.CanStartLocalOrder);
     private void UpdateActions()
     {
         foreach (var card in cards)
         {
             decimal shortage = data.Shortfall(card.Supplier, card.Lines);
+            bool soldOut = card.Lines.Any(line => !line.Product.Available);
+            bool checking = card.Lines.Any(line => data.IsMegaCartLookupPending(line.Product));
+            bool failed = card.Lines.Any(line => data.MegaCartLookupFailed(line.Product));
             card.Status.Text = card.State switch
             {
                 "PREPARING" => "주문 진행 중...", "WAITING_FOR_USER" => "주문 확인 중...", "COMPLETED" => "✓ 주문 완료",
-                "FAILED" => "주문실패 · 주문 내용을 확인해주세요.", "UNKNOWN" => "확인필요 · 주문 여부를 확인할 수 없습니다.", _ => "주문 대기"
+                "FAILED" => "주문실패 · 주문 내용을 확인해주세요.", "UNKNOWN" => "확인필요 · 주문 여부를 확인할 수 없습니다.",
+                _ when soldOut => "품절 상품 포함", _ when checking => "가격 확인 중", _ when failed => "가격 확인 필요", _ => "주문 대기"
             };
-            card.Action.Text = shortage > 0 ? $"{shortage:N0}원 부족" : card.Supplier.Manual ? "판매처에서 주문하기" : "주문하기";
+            card.Action.Text = soldOut ? "품절 상품 포함" : checking ? "가격 확인 중" : failed ? "가격 확인 필요" :
+                shortage > 0 ? $"{shortage:N0}원 부족" : card.Supplier.Manual ? "판매처에서 주문하기" : "주문하기";
             card.Action.BackColor = shortage > 0 ? Ui.Danger : Ui.Accent; card.Action.Enabled = !busy && Eligible(card);
         }
         startAll.Enabled = !busy && !batch && cards.Any(Eligible);

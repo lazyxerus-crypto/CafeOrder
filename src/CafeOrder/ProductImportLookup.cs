@@ -2,6 +2,9 @@ namespace CafeOrder;
 
 internal static class ProductUrlIdentity
 {
+    internal static string? MegaGoodsNo(string supplierId, string url) =>
+        supplierId == "mega" && MegaCoffeeProductLookup.TryProductUrl(url, out _, out var goodsNo) ? goodsNo : null;
+
     internal static string? Key(string supplierId, string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
@@ -17,6 +20,7 @@ public sealed partial class SampleData
     private sealed record ResolvedImport(MegaCoffeeProductSnapshot Product, string PendingPath, string FinalPath);
     private sealed record ImportSelection(ProductWorkbookRead Read, List<ProductWorkbookIssue> Issues,
         List<ProductImportSkip> Skipped);
+    private sealed record ImportCandidate(ProductTransferRow Row, string? Key, string SupplierId, int? OwnerId);
 
     internal async Task<ProductImportPlan> PrepareImportAsync(string path,
         Func<string, Task<MegaProductLookupResult>> lookup, IProgress<string>? progress, CancellationToken cancellationToken)
@@ -84,6 +88,10 @@ public sealed partial class SampleData
             }
             var plan = BuildImportPlan(selection, resolved);
             LogImportPreview(plan);
+            var used = plan.Changes.Select(change => change.PendingImagePath).OfType<string>()
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in resolved.Values.Where(item => !used.Contains(item.PendingPath)))
+                if (File.Exists(item.PendingPath)) File.Delete(item.PendingPath);
             transferred = true;
             return plan;
         }
@@ -99,7 +107,10 @@ public sealed partial class SampleData
     private void LogImportPreview(ProductImportPlan plan)
     {
         foreach (var skip in plan.SkippedRows)
-            Store.Log.Write(LogLevel.INFO, "XLSX_ROW_SKIPPED", "중복 상품 URL 행을 조회와 DB 반영에서 건너뛰었습니다.",
+            Store.Log.Write(LogLevel.INFO, "XLSX_ROW_SKIPPED",
+                skip.Reason == "UNCHANGED_PRODUCT" ? "변경되지 않은 상품 행을 건너뛰었습니다." :
+                    "중복 상품 URL 행을 조회와 DB 반영에서 건너뛰었습니다.",
+                supplier: skip.SupplierId, productId: skip.ExistingProductId, goodsNo: skip.GoodsNo,
                 row: skip.SheetRow, result: "SKIPPED", reason: skip.Reason);
         foreach (var issue in plan.Issues)
             Store.Log.Write(LogLevel.WARN, "XLSX_ROW_FAILED", $"{issue.Column} 열: {issue.Reason}",
@@ -114,50 +125,86 @@ public sealed partial class SampleData
         var issues = read.Issues.ToList();
         var known = Products.ToDictionary(product => product.Id);
         var stored = Store.Database.ReadProducts(Suppliers);
-        var seenIds = new HashSet<int>();
-        var firstByUrl = new Dictionary<string, ProductTransferRow>(StringComparer.OrdinalIgnoreCase);
-        var selected = new List<ProductTransferRow>();
+        var candidates = new List<ImportCandidate>();
         var skipped = new List<ProductImportSkip>();
         foreach (var row in read.Rows)
         {
             if (row.ProductId is int id)
             {
-                if (!seenIds.Add(id)) { issues.Add(new(row.SheetRow, "ProductId", "파일에서 중복된 상품 ID입니다.")); continue; }
                 if (!known.ContainsKey(id)) { issues.Add(new(row.SheetRow, "ProductId", "존재하지 않는 상품 ID입니다.")); continue; }
             }
-            if (row.LookupRequested && !allowLookup)
+            string declaredSupplierId = row.LookupRequested ? DetectSupplier(row.ProductUrl)?.Id ?? "" :
+                Suppliers.First(supplier => supplier.Name == row.Supplier ||
+                    string.Equals(supplier.Id, row.Supplier, StringComparison.OrdinalIgnoreCase)).Id;
+            bool megaUrl = MegaCoffeeProductLookup.TryProductUrl(row.ProductUrl, out _, out _);
+            string supplierId = megaUrl ? "mega" : declaredSupplierId;
+            string? key = ProductUrlIdentity.Key(supplierId, row.ProductUrl);
+            Product[] owners = key == null ? [] : stored.Where(product => string.Equals(
+                ProductUrlIdentity.Key(product.Supplier.Id, product.Url), key, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (owners.Length > 1)
+            {
+                issues.Add(new(row.SheetRow, "ProductUrl", "DB에 동일 상품 URL의 ProductId가 여러 개 있습니다.")); continue;
+            }
+            int? ownerId = owners.FirstOrDefault()?.Id;
+            string? goodsNo = ProductUrlIdentity.MegaGoodsNo(supplierId, row.ProductUrl);
+            if (ownerId != null && ownerId != row.ProductId)
+            {
+                skipped.Add(new(row.SheetRow, "DB_DUPLICATE_PRODUCT_URL", ownerId, supplierId, goodsNo));
+                continue;
+            }
+            if (!row.LookupRequested && megaUrl && declaredSupplierId != "mega" &&
+                (row.ProductId == null || ownerId == row.ProductId))
+            {
+                issues.Add(new(row.SheetRow, "Supplier", "메가커피 상품 URL과 판매처가 일치하지 않습니다."));
+                continue;
+            }
+            ProductTransferRow selected = row;
+            if (row.ProductId is int existingId && key != null && !string.Equals(
+                ProductUrlIdentity.Key(known[existingId].Supplier.Id, known[existingId].Url), key,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                // A different goodsNo is a new product, never a replacement for the old ProductId.
+                if (!MegaCoffeeProductLookup.TryProductUrl(row.ProductUrl, out _, out _))
+                {
+                    issues.Add(new(row.SheetRow, "ProductUrl", "새 상품 URL은 메가커피 실제 조회만 지원합니다."));
+                    continue;
+                }
+                selected = row with { ProductId = null, LookupRequested = true };
+                supplierId = "mega";
+            }
+            if (selected.LookupRequested && !allowLookup)
             { issues.Add(new(row.SheetRow, "ProductUrl", "이 행은 로그인된 상품조회가 필요합니다.")); continue; }
-            if (row.LookupRequested && !MegaCoffeeProductLookup.TryProductUrl(row.ProductUrl, out _, out _))
+            if (selected.LookupRequested && !MegaCoffeeProductLookup.TryProductUrl(row.ProductUrl, out _, out _))
             {
                 string reason = MegaCoffeeProductLookup.IsMegaHost(row.ProductUrl)
                     ? "메가커피 상품 URL 형식이 올바르지 않습니다."
                     : "이 판매처의 URL 조회는 아직 지원하지 않습니다.";
                 issues.Add(new(row.SheetRow, "ProductUrl", reason)); continue;
             }
-            string supplierId = row.LookupRequested ? "mega" : Suppliers.First(supplier =>
-                supplier.Name == row.Supplier || string.Equals(supplier.Id, row.Supplier, StringComparison.OrdinalIgnoreCase)).Id;
-            string? key = ProductUrlIdentity.Key(supplierId, row.ProductUrl);
-            if (key == null) { selected.Add(row); continue; }
-            bool storedByOther = stored.Any(product =>
-                ProductUrlIdentity.Key(product.Supplier.Id, product.Url)?.Equals(key, StringComparison.OrdinalIgnoreCase) == true &&
-                product.Id != row.ProductId);
-            if (row.ProductId == null && storedByOther)
-            { skipped.Add(new(row.SheetRow, "DB_DUPLICATE_PRODUCT_URL")); continue; }
-            if (row.ProductId != null && storedByOther)
-            { issues.Add(new(row.SheetRow, "ProductUrl", "다른 ProductId에 이미 등록된 상품 URL입니다.")); continue; }
-            if (!firstByUrl.TryGetValue(key, out var first))
-            { firstByUrl.Add(key, row); selected.Add(row); continue; }
-            if (row.ProductId == null)
-            { skipped.Add(new(row.SheetRow, "FILE_DUPLICATE_PRODUCT_URL")); continue; }
-            if (first.ProductId == null)
-            {
-                selected.Remove(first);
-                skipped.Add(new(first.SheetRow, "FILE_DUPLICATE_PRODUCT_URL"));
-                firstByUrl[key] = row; selected.Add(row); continue;
-            }
-            issues.Add(new(row.SheetRow, "ProductUrl", "서로 다른 ProductId가 같은 상품 URL을 수정하려 합니다."));
+            candidates.Add(new(selected, key, supplierId, ownerId));
         }
-        return new(new(selected, read.Issues), issues, skipped);
+        var preferred = candidates.Where(candidate => candidate.Key != null)
+            .GroupBy(candidate => candidate.Key!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key,
+                group => group.FirstOrDefault(candidate => candidate.OwnerId == candidate.Row.ProductId &&
+                    candidate.OwnerId != null) ?? group.First(), StringComparer.OrdinalIgnoreCase);
+        var selectedRows = new List<ProductTransferRow>();
+        var seenIds = new HashSet<int>();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Key != null && !ReferenceEquals(preferred[candidate.Key], candidate))
+            {
+                var winner = preferred[candidate.Key];
+                skipped.Add(new(candidate.Row.SheetRow, "FILE_DUPLICATE_PRODUCT_URL",
+                    winner.OwnerId ?? winner.Row.ProductId, candidate.SupplierId,
+                    ProductUrlIdentity.MegaGoodsNo(candidate.SupplierId, candidate.Row.ProductUrl)));
+                continue;
+            }
+            if (candidate.Row.ProductId is int id && !seenIds.Add(id))
+            { issues.Add(new(candidate.Row.SheetRow, "ProductId", "파일에서 중복된 상품 ID입니다.")); continue; }
+            selectedRows.Add(candidate.Row);
+        }
+        return new(new(selectedRows, read.Issues), issues, skipped);
     }
 
     private ProductImportPlan BuildImportPlan(ImportSelection selection,
@@ -199,10 +246,19 @@ public sealed partial class SampleData
                         { DisplayPrice = display, Url = row.ProductUrl, IsActive = row.IsActive, DataOrigin = "UserMock" }
                     : existing with { Name = row.Name, Price = row.Price, DisplayPrice = display, Supplier = seller,
                         Category = row.Category, Url = row.ProductUrl, IsActive = row.IsActive };
-                if (existing != null && existing.Name == proposed.Name && existing.Price == proposed.Price &&
-                    existing.PriceText == proposed.PriceText && existing.Supplier.Id == proposed.Supplier.Id &&
-                    existing.Category == proposed.Category && existing.Url == proposed.Url && existing.IsActive == proposed.IsActive)
-                    continue;
+            }
+            if (existing != null && existing.Name == proposed.Name && existing.Price == proposed.Price &&
+                existing.PriceText == proposed.PriceText && existing.Supplier.Id == proposed.Supplier.Id &&
+                existing.Category == proposed.Category && existing.IsActive == proposed.IsActive &&
+                existing.Available == proposed.Available && string.Equals(
+                    ProductUrlIdentity.Key(existing.Supplier.Id, existing.Url),
+                    ProductUrlIdentity.Key(proposed.Supplier.Id, proposed.Url), StringComparison.OrdinalIgnoreCase) &&
+                (!row.LookupRequested || existing.ImageUrl == proposed.ImageUrl &&
+                    existing.ImageCachePath is { } imagePath && File.Exists(imagePath)))
+            {
+                selection.Skipped.Add(new(row.SheetRow, "UNCHANGED_PRODUCT", existing.Id,
+                    existing.Supplier.Id, ProductUrlIdentity.MegaGoodsNo(existing.Supplier.Id, existing.Url)));
+                continue;
             }
             changes.Add(new(existing, proposed, existing != null && stored.Contains(existing.Id), row.SheetRow, pending));
         }

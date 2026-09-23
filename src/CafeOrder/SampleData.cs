@@ -41,6 +41,7 @@ public sealed partial class SampleData
     public Dictionary<string, decimal> Shipping { get; } = [];
     public event Action? CartChanged;
     public event Action<Product>? ProductAdded;
+    internal event Action<Product, CartLine>? FirstMegaCartAdded;
     public event Action<Product>? ProductChanged;
     public event Action? CatalogChanged;
     public LocalState Store { get; }
@@ -101,8 +102,9 @@ public sealed partial class SampleData
     public void AddToCart(Product p)
     {
         if (!p.IsActive || !p.Available || IsLocked(p)) return;
-        int quantity = Store.Database.AddToCart(p);
         var line = Cart.Find(x => x.Product.Id == p.Id);
+        bool first = line == null;
+        int quantity = Store.Database.AddToCart(p);
         if (line == null) line = new(p, quantity);
         else line.Quantity = quantity;
         Cart.Remove(line); Cart.Insert(0, line);
@@ -110,6 +112,8 @@ public sealed partial class SampleData
             supplier: p.Supplier.Id, productId: p.Id, result: "SUCCESS");
         Notify();
         ProductAdded?.Invoke(p);
+        if (first && p.Supplier.Id == "mega" && MegaCoffeeProductLookup.TryProductUrl(p.Url, out _, out _))
+            FirstMegaCartAdded?.Invoke(p, line);
     }
     public void ChangeQuantity(CartLine line, int change)
     {
@@ -262,7 +266,9 @@ public sealed partial class SampleData
             var change = plan.Changes[index]; var product = written[index];
             Store.Log.Write(LogLevel.INFO, change.Existing == null ? "XLSX_ROW_ADDED" : "XLSX_ROW_UPDATED",
                 change.Existing == null ? "XLSX 상품 행을 신규 등록했습니다." : "XLSX 상품 행으로 기존 상품을 수정했습니다.",
-                supplier: product.Supplier.Id, productId: product.Id, row: change.SheetRow, result: "SUCCESS");
+                supplier: product.Supplier.Id, productId: product.Id, row: change.SheetRow, result: "SUCCESS",
+                goodsNo: ProductUrlIdentity.MegaGoodsNo(product.Supplier.Id, product.Url),
+                oldPrice: change.Existing?.Price, newPrice: product.Price);
         }
         Store.Log.Write(LogLevel.INFO, "XLSX_IMPORT_APPLIED",
             $"XLSX 반영 완료: 추가 {plan.Added}건, 수정 {plan.Updated}건, 건너뜀 {plan.Skipped}건.", result: "SUCCESS");

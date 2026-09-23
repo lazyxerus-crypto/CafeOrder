@@ -20,6 +20,16 @@ internal static partial class Program
             try { CheckXlsxLookupAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: linked XLSX validation and rollback"); return 0; }
             catch (Exception ex) { Console.WriteLine(ex); return 1; }
         }
+        if (args.Contains("--mega-cart-check"))
+        {
+            try { CheckMegaCartRefreshAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: MegaCoffee first cart lookup"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
+        if (args.Contains("--mega-cart-live-check"))
+        {
+            try { CheckMegaCartLiveAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("Real cart lookup stopped: " + ex.GetType().Name + " · " + ex.Message); return 1; }
+        }
         if (args.Contains("--image-check"))
         {
             try { CheckImageSaveRules(); Console.WriteLine("PASS: image save rules"); return 0; }
@@ -100,6 +110,7 @@ internal static partial class Program
             CheckDatabase();
             CheckXlsx();
             CheckXlsxLookupAsync().GetAwaiter().GetResult();
+            CheckMegaCartRefreshAsync().GetAwaiter().GetResult();
             CheckImageSaveRules();
             CheckOperationalLogAsync().GetAwaiter().GetResult();
             if (args.Contains("--repro-six")) { Run(ReproSix); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
@@ -114,6 +125,9 @@ internal static partial class Program
             string logUi = CheckDirectory("log-ui");
             Run(CheckLogUi, logUi);
             Run(CheckLogRestart, logUi);
+            string megaCartUi = CheckDirectory("mega-cart-ui");
+            SeedMegaCartUi(megaCartUi);
+            Run(CheckMegaCartUi, megaCartUi);
         }
         catch (Exception ex) { failure = ex; }
         finally { if (clipboard != null) Clipboard.SetDataObject(clipboard, true); else Clipboard.Clear(); }

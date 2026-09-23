@@ -47,6 +47,10 @@ internal sealed class CartProductRow : BufferedPanel
         bool details = false;
         if (title.Text != Line.Product.Name) { title.Text = Line.Product.Name; details = true; }
         string currentPrice = $"{Line.Product.Price:N0}원";
+        if (Line.Product.Supplier.Id == "mega" && MegaCoffeeProductLookup.TryProductUrl(Line.Product.Url, out _, out _))
+            currentPrice = data.IsMegaCartLookupPending(Line.Product) ? $"저장 가격 {currentPrice} · 확인 중" :
+                data.MegaCartLookupFailed(Line.Product) ? $"저장 가격 {currentPrice} · 확인 실패" : currentPrice;
+        if (!Line.Product.Available) currentPrice += " · 품절";
         if (price.Text != currentPrice) { price.Text = currentPrice; details = true; }
         string currentIdentity = ProductImages.Identity(Line.Product);
         if (imageIdentity != currentIdentity)
@@ -153,10 +157,14 @@ internal sealed class SupplierCartCard : SoftPanel
         {
             string text = $"소계 {data.Subtotal(lines):N0}원"; if (subtotal.Text != text) subtotal.Text = text;
             decimal shortage = data.Shortfall(supplier, lines);
-            string action = shortage > 0 ? $"{shortage:N0}원 부족" : "주문하기";
+            bool soldOut = lines.Any(line => !line.Product.Available);
+            bool checking = lines.Any(line => data.IsMegaCartLookupPending(line.Product));
+            bool failed = lines.Any(line => data.MegaCartLookupFailed(line.Product));
+            string action = soldOut ? "품절 상품 포함" : checking ? "가격 확인 중" :
+                failed ? "가격 확인 필요" : shortage > 0 ? $"{shortage:N0}원 부족" : "주문하기";
             if (order.Text != action) { measureVersion++; order.Text = action; }
             order.BackColor = shortage > 0 ? Ui.Danger : Ui.Accent; order.ForeColor = Color.White;
-            order.Enabled = shortage == 0;
+            order.Enabled = shortage == 0 && lines.All(data.CanStartLocalOrder);
         }
         if (structural) { ResumeLayout(true); PerformLayout(); }
     }

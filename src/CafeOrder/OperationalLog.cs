@@ -21,7 +21,8 @@ internal sealed class OperationalLog
     internal OperationalLog(string directory) => FilePath = Path.Combine(directory, "CafeOrder.log");
 
     internal void Write(LogLevel level, string code, string description, string? supplier = null,
-        int? productId = null, int? row = null, string? result = null, string? reason = null, Exception? error = null)
+        int? productId = null, int? row = null, string? result = null, string? reason = null, Exception? error = null,
+        string? goodsNo = null, decimal? oldPrice = null, decimal? newPrice = null)
     {
         static string Token(string value) => Regex.Replace(value, "[^A-Za-z0-9_-]", "_");
         // Call sites use fixed descriptions. This second guard removes accidental secrets if a caller regresses.
@@ -31,7 +32,10 @@ internal sealed class OperationalLog
             .Append(" [").Append(level).Append("] ").Append(Token(code));
         if (supplier != null) line.Append(" supplier=").Append(Token(supplier));
         if (productId != null) line.Append(" productId=").Append(productId.Value);
+        if (goodsNo != null) line.Append(" goodsNo=").Append(Token(goodsNo));
         if (row != null) line.Append(" row=").Append(row.Value);
+        if (oldPrice != null) line.Append(" oldPrice=").Append(oldPrice.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (newPrice != null) line.Append(" newPrice=").Append(newPrice.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (result != null) line.Append(" result=").Append(Token(result));
         if (reason != null) line.Append(" reason=").Append(Token(reason));
         if (error != null) line.Append(" errorType=").Append(Token(error.GetType().Name));
