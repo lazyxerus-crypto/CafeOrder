@@ -3,6 +3,7 @@ namespace CafeOrder;
 public sealed class ProductsView : UserControl
 {
     private readonly SampleData data;
+    private readonly SupplierSessionManager? sessions;
     internal Func<string, Task<MegaProductLookupResult>>? MegaLookup;
     private readonly ProductGrid products = new();
     private readonly FlowLayoutPanel cart = Ui.List("CartList");
@@ -26,7 +27,8 @@ public sealed class ProductsView : UserControl
 
     internal ProductsView(SampleData data, SupplierSessionManager? sessions)
     {
-        this.data = data; MegaLookup = sessions == null ? null : sessions.LookupMegaProductAsync; Dock = DockStyle.Fill; DoubleBuffered = true;
+        this.data = data; this.sessions = sessions;
+        MegaLookup = sessions == null ? null : sessions.LookupMegaProductAsync; Dock = DockStyle.Fill; DoubleBuffered = true;
         supplier = Ui.Combo(new[] { "전체 판매처" }.Concat(data.Suppliers.Select(x => x.Name)), "SupplierFilter");
         var root = new TableLayoutPanel { Name = "ProductColumns", Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 2 };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -237,6 +239,6 @@ public sealed class ProductsView : UserControl
     private void OpenOrders(CartLine[] lines)
     {
         if (lines.Length == 0 || lines.Any(line => !data.CanStartLocalOrder(line))) return;
-        using var dialog = new OrderForm(data, lines); dialog.ShowDialog(FindForm());
+        using var dialog = new OrderForm(data, lines) { Sessions = sessions }; dialog.ShowDialog(FindForm());
     }
 }

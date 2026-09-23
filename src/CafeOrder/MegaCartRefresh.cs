@@ -108,7 +108,7 @@ public sealed partial class SampleData
             {
                 Name = snapshot.Name, Price = snapshot.Price, DisplayPrice = snapshot.DisplayPrice,
                 Url = snapshot.ProductUrl, ImageUrl = snapshot.ImageUrl, ImageCachePath = imagePath,
-                Available = snapshot.Available
+                Available = snapshot.Available, LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow
             };
             Store.Database.SaveProduct(updated);
             saved = true;
@@ -116,6 +116,7 @@ public sealed partial class SampleData
             product.DisplayPrice = updated.DisplayPrice; product.Url = updated.Url;
             product.ImageUrl = updated.ImageUrl; product.ImageCachePath = updated.ImageCachePath;
             product.Available = updated.Available;
+            product.LastSuccessfulCheckAtUtc = updated.LastSuccessfulCheckAtUtc;
             Store.Log.Write(LogLevel.INFO, "CART_FIRST_LOOKUP_SUCCESS", "메가커피 최초 담기 상품정보를 SQLite에 갱신했습니다.",
                 supplier: "mega", productId: product.Id, goodsNo: goodsNo, result: "SUCCESS",
                 oldPrice: oldPrice, newPrice: product.Price);

@@ -16,6 +16,7 @@ public record Product(int Id, string Name, decimal Price, string PriceNote,
     public string? ImageUrl { get; set; }
     public string? ImageCachePath { get; set; }
     public string? ManualImagePath { get; set; }
+    public DateTimeOffset? LastSuccessfulCheckAtUtc { get; set; }
     public string DataOrigin { get; set; } = "Sample";
     public string PriceText => DisplayPrice ?? $"{Price:N0}원{(PriceNote.Length == 0 ? "" : $" ({PriceNote})")}";
 }
@@ -112,7 +113,11 @@ public sealed partial class SampleData
             supplier: p.Supplier.Id, productId: p.Id, result: "SUCCESS");
         Notify();
         ProductAdded?.Invoke(p);
-        if (first && p.Supplier.Id == "mega" && MegaCoffeeProductLookup.TryProductUrl(p.Url, out _, out _))
+        if ((first || !IsMegaCartLookupPending(p)) && p.Supplier.Id == "mega" &&
+            MegaCoffeeProductLookup.TryProductUrl(p.Url, out _, out _) &&
+            (p.LastSuccessfulCheckAtUtc is not { } checkedAt ||
+                DateTimeOffset.UtcNow - checkedAt < TimeSpan.Zero ||
+                DateTimeOffset.UtcNow - checkedAt >= TimeSpan.FromHours(24)))
             FirstMegaCartAdded?.Invoke(p, line);
     }
     public void ChangeQuantity(CartLine line, int change)
@@ -194,7 +199,8 @@ public sealed partial class SampleData
         var product = Store.Database.InsertProduct(new Product(0, snapshot.Name, snapshot.Price, "", seller, category, snapshot.Available, 0)
         {
             Url = snapshot.ProductUrl, DisplayPrice = snapshot.DisplayPrice,
-            ImageUrl = snapshot.ImageUrl, ImageCachePath = imagePath
+            ImageUrl = snapshot.ImageUrl, ImageCachePath = imagePath,
+            LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow
         });
         Products.Add(product);
         Store.Log.Write(LogLevel.INFO, "PRODUCT_REGISTERED", "실제 조회한 메가커피 상품을 로컬 DB에 등록했습니다.",

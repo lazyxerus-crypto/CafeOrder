@@ -17,7 +17,8 @@ internal static class ProductUrlIdentity
 
 public sealed partial class SampleData
 {
-    private sealed record ResolvedImport(MegaCoffeeProductSnapshot Product, string PendingPath, string FinalPath);
+    private sealed record ResolvedImport(MegaCoffeeProductSnapshot Product, string PendingPath, string FinalPath,
+        DateTimeOffset CheckedAtUtc);
     private sealed record ImportSelection(ProductWorkbookRead Read, List<ProductWorkbookIssue> Issues,
         List<ProductImportSkip> Skipped);
     private sealed record ImportCandidate(ProductTransferRow Row, string? Key, string SupplierId, int? OwnerId);
@@ -69,7 +70,7 @@ public sealed partial class SampleData
                 {
                     await Task.Run(() => ManualImages.Save(result.Product.ImageBytes, pending), cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
-                    resolved.Add(row.SheetRow, new(result.Product, pending, Store.NewWebImagePath()));
+                    resolved.Add(row.SheetRow, new(result.Product, pending, Store.NewWebImagePath(), DateTimeOffset.UtcNow));
                 }
                 catch (OperationCanceledException)
                 { if (File.Exists(pending)) File.Delete(pending); throw; }
@@ -230,10 +231,12 @@ public sealed partial class SampleData
                 proposed = existing == null
                     ? new Product(0, item.Name, item.Price, "", seller, category, item.Available, 0)
                         { DisplayPrice = item.DisplayPrice, Url = item.ProductUrl, ImageUrl = item.ImageUrl,
-                            ImageCachePath = resolvedRow.FinalPath, DataOrigin = "UserMock" }
+                            ImageCachePath = resolvedRow.FinalPath, DataOrigin = "UserMock",
+                            LastSuccessfulCheckAtUtc = resolvedRow.CheckedAtUtc }
                     : existing with { Name = item.Name, Price = item.Price, PriceNote = "", DisplayPrice = item.DisplayPrice,
                         Supplier = seller, Category = category, Url = item.ProductUrl, IsActive = true,
-                        Available = item.Available, ImageUrl = item.ImageUrl, ImageCachePath = resolvedRow.FinalPath };
+                        Available = item.Available, ImageUrl = item.ImageUrl, ImageCachePath = resolvedRow.FinalPath,
+                        LastSuccessfulCheckAtUtc = resolvedRow.CheckedAtUtc };
                 pending = resolvedRow.PendingPath;
             }
             else
@@ -254,6 +257,7 @@ public sealed partial class SampleData
                     ProductUrlIdentity.Key(existing.Supplier.Id, existing.Url),
                     ProductUrlIdentity.Key(proposed.Supplier.Id, proposed.Url), StringComparison.OrdinalIgnoreCase) &&
                 (!row.LookupRequested || existing.ImageUrl == proposed.ImageUrl &&
+                    existing.LastSuccessfulCheckAtUtc == proposed.LastSuccessfulCheckAtUtc &&
                     existing.ImageCachePath is { } imagePath && File.Exists(imagePath)))
             {
                 selection.Skipped.Add(new(row.SheetRow, "UNCHANGED_PRODUCT", existing.Id,

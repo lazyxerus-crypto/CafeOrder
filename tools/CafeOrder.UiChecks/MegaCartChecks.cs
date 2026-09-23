@@ -15,6 +15,8 @@ internal static partial class Program
         var product = data.RegisterMegaProduct(new("조회 전 저장 상품", 1, "1원", url,
             "https://megacotr3116.cdn-nhncommerce.com/data/goods/test.jpg", bytes, true),
             "파우더", SaveInitialImage(data, bytes));
+        product.LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow.AddHours(-25);
+        data.Store.Database.SaveProduct(product);
         string initialImage = product.ImageCachePath!;
         await using var sessions = new SupplierSessionManager(log: data.Store.Log);
         Task? refresh = null;
@@ -55,7 +57,28 @@ internal static partial class Program
             string path = data.Store.NewWebImagePath(); ManualImages.Save(snapshot.ImageBytes, path);
             return data.RegisterMegaProduct(snapshot, "파우더", path);
         }
+        var ageData = new SampleData(new LocalState(CheckDirectory("mega-cart-age")));
+        var ageSnapshot = Snapshot(firstUrl, "시각 검사 상품", 1000, true, Color.Red);
+        var ageProduct = ageData.RegisterMegaProduct(ageSnapshot, "파우더",
+            SaveInitialImage(ageData, ageSnapshot.ImageBytes));
+        int ageLookups = 0; Task? ageTask = null;
+        ageData.FirstMegaCartAdded += (item, line) => ageTask = ageData.RefreshFirstMegaCartAsync(item, line, _ =>
+        { ageLookups++; return Task.FromResult(new MegaProductLookupResult(MegaProductLookupStatus.Success, ageSnapshot)); });
+        ageData.AddToCart(ageProduct);
+        Require(ageLookups == 0, "First card add reuses product checked within 24 hours");
+        ageProduct.LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow.AddHours(-25);
+        ageData.Store.Database.SaveProduct(ageProduct);
+        ageData.AddToCart(ageProduct);
+        await ageTask!;
+        ageData.ChangeQuantity(ageData.Cart.Single(), 1);
+        ageData.ChangeQuantity(ageData.Cart.Single(), -1);
+        Require(ageLookups == 1 && ageData.Cart.Single().Quantity == 2 &&
+            new SampleData(new LocalState(ageData.Store.DirectoryPath)).Products.Single(p => p.Id == ageProduct.Id).LastSuccessfulCheckAtUtc is { } checkedAt &&
+            DateTimeOffset.UtcNow - checkedAt < TimeSpan.FromMinutes(1),
+            "Stale card re-add fetches once; +/- are local and success time survives restart");
         var first = Register(firstUrl, "처음 상품");
+        first.LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow.AddHours(-25);
+        data.Store.Database.SaveProduct(first);
         var requests = new List<Task>();
         int lookups = 0;
         var firstResponse = new TaskCompletionSource<MegaProductLookupResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -86,7 +109,12 @@ internal static partial class Program
         ManualImages.Save(ImageBytes(Color.Yellow), manualPath); data.SetManualImage(first, manualPath);
         data.Remove(current);
         data.AddToCart(first);
-        Require(lookups == 2 && data.Cart.Single().Quantity == 1, "Removal followed by first add starts one new lookup");
+        Require(lookups == 1 && data.Cart.Single().Quantity == 1, "Recent successful lookup skips a new first-add web request");
+        data.Remove(data.Cart.Single());
+        first.LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow.AddHours(-25);
+        data.Store.Database.SaveProduct(first);
+        data.AddToCart(first);
+        Require(lookups == 2 && data.Cart.Single().Quantity == 1, "Stale lookup refreshes after removal and first add");
         secondResponse.SetResult(new(MegaProductLookupStatus.Success,
             Snapshot(firstUrl, "품절 변경 상품", 3000, false, Color.Green)));
         await requests[1];
@@ -100,6 +128,8 @@ internal static partial class Program
         var failedData = new SampleData(new LocalState(CheckDirectory("mega-cart-failed")));
         var failedProduct = failedData.RegisterMegaProduct(Snapshot(secondUrl, "저장 상품", 1000, true, Color.Red),
             "파우더", SaveInitialImage(failedData, ImageBytes(Color.Red)));
+        failedProduct.LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow.AddHours(-25);
+        failedData.Store.Database.SaveProduct(failedProduct);
         Task? failedTask = null;
         failedData.FirstMegaCartAdded += (product, line) => failedTask = failedData.RefreshFirstMegaCartAsync(product, line,
             _ => Task.FromResult(new MegaProductLookupResult(MegaProductLookupStatus.LoginRequired)));
@@ -113,6 +143,8 @@ internal static partial class Program
         var raceData = new SampleData(new LocalState(CheckDirectory("mega-cart-race")));
         var raceProduct = raceData.RegisterMegaProduct(Snapshot(thirdUrl, "경합 상품", 1000, true, Color.Red),
             "파우더", SaveInitialImage(raceData, ImageBytes(Color.Red)));
+        raceProduct.LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow.AddHours(-25);
+        raceData.Store.Database.SaveProduct(raceProduct);
         var oldResponse = new TaskCompletionSource<MegaProductLookupResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var newResponse = new TaskCompletionSource<MegaProductLookupResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         int raceLookups = 0;
@@ -141,6 +173,8 @@ internal static partial class Program
         var removedData = new SampleData(new LocalState(CheckDirectory("mega-cart-removed")));
         var removedProduct = removedData.RegisterMegaProduct(Snapshot(thirdUrl, "삭제 전 상품", 1000, true, Color.Red),
             "파우더", SaveInitialImage(removedData, ImageBytes(Color.Red)));
+        removedProduct.LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow.AddHours(-25);
+        removedData.Store.Database.SaveProduct(removedProduct);
         var removedResponse = new TaskCompletionSource<MegaProductLookupResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         Task? removedTask = null;
         removedData.FirstMegaCartAdded += (product, line) => removedTask = removedData.RefreshFirstMegaCartAsync(product, line,
@@ -178,9 +212,12 @@ internal static partial class Program
         using (var graphics = Graphics.FromImage(bitmap)) graphics.Clear(Color.Red);
         using var stream = new MemoryStream(); bitmap.Save(stream, ImageFormat.Png);
         byte[] bytes = stream.ToArray();
-        return data.RegisterMegaProduct(new("화면 검사 상품", 1000, "1,000원", url,
+        var product = data.RegisterMegaProduct(new("화면 검사 상품", 1000, "1,000원", url,
             "https://megacotr3116.cdn-nhncommerce.com/data/goods/test.jpg", bytes, true),
-            "파우더", SaveInitialImage(data, bytes)).Id;
+            "파우더", SaveInitialImage(data, bytes));
+        product.LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow.AddHours(-25);
+        data.Store.Database.SaveProduct(product);
+        return product.Id;
     }
 
     private static async Task CheckMegaCartUi(MainForm main)

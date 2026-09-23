@@ -147,10 +147,10 @@ internal static partial class Program
         { sheet.Cell(2, 7).Value = yogurt; sheet.Cell(3, 1).Value = yogurtProduct.Id; sheet.Cell(3, 7).Value = yogurt + "&tracking=1"; });
         int beforeExplicitLookups = lookups;
         using (var plan = await data.PrepareImportAsync(explicitUpdate, Lookup, null, CancellationToken.None))
-            Require(plan.Issues.Count == 0 && plan.Skipped == 2 && plan.Updated == 0 &&
+            Require(plan.Issues.Count == 0 && plan.Skipped == 1 && plan.Updated == 1 &&
                 lookups == beforeExplicitLookups + 1 &&
-                plan.SkippedRows.Any(skip => skip.SheetRow == 3 && skip.Reason == "UNCHANGED_PRODUCT"),
-                "Matching ProductId row is inspected even when a blank-ID duplicate precedes it");
+                plan.Changes.Single().SheetRow == 3 && plan.Changes.Single().Proposed.LastSuccessfulCheckAtUtc != null,
+                "Matching ProductId row records successful lookup time even when a blank-ID duplicate precedes it");
         string conflictingIds = MakeWorkbook(dir, "linked-conflicting-ids", sheet =>
         {
             sheet.Cell(2, 1).Value = yogurtProduct.Id; sheet.Cell(2, 7).Value = third;

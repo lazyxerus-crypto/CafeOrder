@@ -53,7 +53,7 @@ internal sealed class MegaCoffeeLoginProbe : ISupplierLoginProbe
     }
 }
 
-internal sealed class SupplierSessionManager : IAsyncDisposable
+internal sealed partial class SupplierSessionManager : IAsyncDisposable
 {
     private static readonly string[] AutoIds = ["mega", "piece", "food", "wym", "nuldam"];
     private readonly Dictionary<string, SessionSlot> slots = AutoIds.ToDictionary(id => id, _ => new SessionSlot());

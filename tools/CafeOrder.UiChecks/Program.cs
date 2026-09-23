@@ -15,6 +15,16 @@ internal static partial class Program
     private static int Main(string[] args)
     {
         output = Path.GetFullPath(args.Length == 0 ? "artifacts/ui-checks" : args[0]); Directory.CreateDirectory(output);
+        if (args.Contains("--mega-site-manual"))
+        {
+            try { MegaSiteCartManualChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("Manual cart window stopped: " + ex.GetType().Name); return 1; }
+        }
+        if (args.Contains("--mega-site-readonly"))
+        {
+            try { MegaSiteCartReadOnlyChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("Read-only site cart check stopped: " + ex.GetType().Name); return 1; }
+        }
         if (args.Contains("--xlsx-lookup-check"))
         {
             try { CheckXlsxLookupAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: linked XLSX validation and rollback"); return 0; }

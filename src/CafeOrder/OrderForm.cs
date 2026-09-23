@@ -20,6 +20,23 @@ public sealed class OrderForm : Form
     private readonly SampleData data;
     private readonly Button startAll;
     private bool busy, batch, closing;
+    private bool activeSitePreparation;
+    private SupplierSessionManager? sessions;
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal SupplierSessionManager? Sessions
+    {
+        get => sessions;
+        set
+        {
+            sessions = value;
+            if (value != null)
+            {
+                foreach (var card in cards.Where(card => !card.Supplier.Manual && card.Supplier.Id != "mega"))
+                    card.State = "NOT_CONFIGURED";
+                UpdateActions();
+            }
+        }
+    }
 
     public OrderForm(SampleData data, IEnumerable<CartLine> lines, bool startManual = false)
     {
@@ -28,7 +45,7 @@ public sealed class OrderForm : Form
         ClientSize = new Size(780, 600); MinimumSize = new Size(620, 440); StartPosition = FormStartPosition.CenterParent;
         var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.RightToLeft };
         var close = Ui.Button("닫기", Close, name: "CloseOrders");
-        startAll = Ui.Button("전체 주문하기", StartAll, true, "StartAllOrders");
+        startAll = Ui.Button("전체 주문 시작", StartAll, true, "StartAllOrders");
         void FitFooter()
         {
             int width = Math.Max(170, new[] { close, startAll }.Max(b => TextRenderer.MeasureText(b.Text, b.Font).Width + b.Padding.Horizontal + 12));
@@ -58,13 +75,24 @@ public sealed class OrderForm : Form
         if (disposing && !closing) { closing = true; data.CartChanged -= Sync; data.Unlock(targets); }
         base.Dispose(disposing);
     }
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (activeSitePreparation)
+        {
+            e.Cancel = true;
+            MessageBox.Show(this, "사이트 장바구니 확인이 끝난 뒤 창을 닫을 수 있습니다.", "주문 진행",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        base.OnFormClosing(e);
+    }
     private void AddCard(Supplier supplier, List<CartLine> lines, string state)
     {
         var card = new OrderCard(supplier, state) { Lines = lines };
         card.Status = Ui.Role(Ui.Text(""), TypographyKey.OrderInfo); card.Status.Name = $"OrderStatus_{lines[0].Product.Id}";
         card.Items = Ui.Column(); card.Items.Padding = Padding.Empty;
         card.Total = Ui.Role(Ui.Text("", true), TypographyKey.OrderInfo);
-        card.Action = Ui.Button(supplier.Manual ? "판매처에서 주문하기" : "주문하기", () => StartOne(card), true, $"OrderAction_{lines[0].Product.Id}");
+        card.Action = Ui.Button(supplier.Manual ? "판매처에서 주문하기" : "주문 시작", () => StartOne(card), true, $"OrderAction_{lines[0].Product.Id}");
         card.Action.AutoSize = false; card.Action.Size = new Size(220, Ui.ActionHeight(card.Action, 220));
         card.View = Ui.Column(Ui.SellerHeading(supplier), card.Status, card.Items, card.Total, card.Action);
         card.View.Name = $"Order_{supplier.Id}_{lines[0].Product.Id}"; cards.Add(card); list.Controls.Add(card.View);
@@ -108,12 +136,17 @@ public sealed class OrderForm : Form
             bool failed = card.Lines.Any(line => data.MegaCartLookupFailed(line.Product));
             card.Status.Text = card.State switch
             {
-                "PREPARING" => "주문 진행 중...", "WAITING_FOR_USER" => "주문 확인 중...", "COMPLETED" => "✓ 주문 완료",
+                "PREPARING" => "사이트 장바구니 확인 중...", "WAITING_FOR_USER" => "사이트 장바구니 사용자 확인 필요",
+                "READY" => "✓ 사이트 장바구니 준비 완료 · 주문/결제 미실행", "COMPLETED" => "✓ 주문 완료",
+                "NOT_CONFIGURED" => "사이트 장바구니 연동 전",
+                "FAILED" when Sessions != null && card.Supplier.Id == "mega" => "사이트 장바구니 준비 실패",
+                "UNKNOWN" when Sessions != null && card.Supplier.Id == "mega" => "사이트 장바구니 상태 확인 필요",
                 "FAILED" => "주문실패 · 주문 내용을 확인해주세요.", "UNKNOWN" => "확인필요 · 주문 여부를 확인할 수 없습니다.",
                 _ when soldOut => "품절 상품 포함", _ when checking => "가격 확인 중", _ when failed => "가격 확인 필요", _ => "주문 대기"
             };
             card.Action.Text = soldOut ? "품절 상품 포함" : checking ? "가격 확인 중" : failed ? "가격 확인 필요" :
-                shortage > 0 ? $"{shortage:N0}원 부족" : card.Supplier.Manual ? "판매처에서 주문하기" : "주문하기";
+                shortage > 0 ? $"{shortage:N0}원 부족" : card.Supplier.Manual ? "판매처에서 주문하기" :
+                card.State == "READY" ? "장바구니 준비 완료" : "주문 시작";
             card.Action.BackColor = shortage > 0 ? Ui.Danger : Ui.Accent; card.Action.Enabled = !busy && Eligible(card);
         }
         startAll.Enabled = !busy && !batch && cards.Any(Eligible);
@@ -121,7 +154,9 @@ public sealed class OrderForm : Form
     private void StartOne(OrderCard card)
     {
         if (busy || !Eligible(card)) return;
-        busy = true; data.Lock(card.Lines); RunCard(card);
+        busy = true; data.Lock(card.Lines);
+        if (card.Supplier.Id == "mega" && Sessions != null) _ = RunMegaAsync(card);
+        else RunCard(card);
     }
     private void StartAll()
     {
@@ -135,7 +170,77 @@ public sealed class OrderForm : Form
         var card = cards.FirstOrDefault(Eligible);
         if (card == null) { busy = false; batch = false; UpdateActions(); return; }
         if (card.Supplier.Manual) { busy = false; UpdateActions(); list.ScrollControlIntoView(card.View); return; }
-        busy = true; RunCard(card);
+        busy = true;
+        if (card.Supplier.Id == "mega" && Sessions != null) _ = RunMegaAsync(card);
+        else RunCard(card);
+    }
+    private async Task RunMegaAsync(OrderCard card)
+    {
+        activeSitePreparation = true;
+        card.State = "PREPARING"; UpdateActions();
+        try
+        {
+            var targets = new List<SiteCartTarget>();
+            foreach (var line in card.Lines)
+            {
+                if (!MegaCoffeeProductLookup.TryProductUrl(line.Product.Url, out var url, out var goodsNo))
+                    throw new InvalidDataException("메가커피 상품 코드를 확인할 수 없습니다.");
+                targets.Add(new(line.Product.Id, goodsNo, url!.ToString(), line.Product.Name,
+                    line.Quantity, line.Product.Price));
+            }
+            var attempt = data.Store.Database.CreateSiteCartAttempt("mega", targets);
+            data.Store.Log.Write(LogLevel.INFO, "SITE_CART_PREPARE_STARTED",
+                "메가커피 주문 대상과 수량을 SQLite에 저장한 뒤 사이트 확인을 시작했습니다.",
+                supplier: "mega", result: "STARTED");
+            var result = await Sessions!.PrepareMegaSiteCartAsync(attempt, data.Store.Database, ConfirmExistingAsync);
+            if (!closing && !IsDisposed)
+            {
+                card.State = result.State;
+                if (result.State != "READY") data.Unlock(card.Lines);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            data.Store.Log.Write(LogLevel.ERROR, "SITE_CART_PREPARE_FAILED",
+                "메가커피 사이트 장바구니 준비를 시작하거나 완료하지 못했습니다.",
+                supplier: "mega", result: "FAILED", error: ex);
+            if (!closing && !IsDisposed) { card.State = "FAILED"; data.Unlock(card.Lines); }
+        }
+        finally
+        {
+            activeSitePreparation = false;
+            if (!closing && !IsDisposed)
+            { busy = false; UpdateActions(); if (batch) BeginInvoke(Advance); }
+        }
+    }
+
+    private Task<bool> ConfirmExistingAsync(IReadOnlyList<SiteCartEntry> existing)
+    {
+        if (closing || IsDisposed) return Task.FromResult(false);
+        if (InvokeRequired)
+        {
+            var response = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            BeginInvoke(() =>
+            {
+                try { response.SetResult(ConfirmExisting(existing)); }
+                catch (Exception ex) { response.SetException(ex); }
+            });
+            return response.Task;
+        }
+        return Task.FromResult(ConfirmExisting(existing));
+    }
+
+    private bool ConfirmExisting(IReadOnlyList<SiteCartEntry> existing)
+    {
+        if (closing || IsDisposed) return false;
+        string current = string.Join(Environment.NewLine, existing.Take(8).Select(item =>
+            $"• {item.Name} · {item.Quantity}개"));
+        if (existing.Count > 8) current += $"{Environment.NewLine}외 {existing.Count - 8}건";
+        return MessageBox.Show(this,
+            $"메가커피 사이트 장바구니에 기존 상품 {existing.Count}건이 있습니다.{Environment.NewLine}" +
+            $"{current}{Environment.NewLine}{Environment.NewLine}" +
+            "기존 사이트 장바구니를 비우고 이번 주문 대상만 담을까요? 주문·결제는 실행하지 않습니다.",
+            "기존 사이트 장바구니 확인", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
     }
     private void RunCard(OrderCard card)
     {
