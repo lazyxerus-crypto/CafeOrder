@@ -139,6 +139,14 @@ internal sealed class CatalogDatabase
             foreach (var change in changes)
             {
                 Product product = change.Proposed;
+                if (change.PendingImagePath != null)
+                {
+                    using var duplicate = Command(db, tx,
+                        "SELECT COUNT(*) FROM Products WHERE ProductUrl=$url COLLATE NOCASE AND ProductId<>$id",
+                        ("$url", product.Url), ("$id", change.Existing?.Id ?? 0));
+                    if (Convert.ToInt64(duplicate.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+                        throw new InvalidDataException($"{change.SheetRow}행 · ProductUrl: 확인 이후 같은 URL이 등록됐습니다. 다시 가져오세요.");
+                }
                 if (change.Existing is { } existing)
                 {
                     using var query = Command(db, tx, "SELECT COUNT(*) FROM Products WHERE ProductId=$id", ("$id", existing.Id));

@@ -9,6 +9,8 @@ internal sealed class CartProductRow : BufferedPanel
     private readonly Button remove;
     private readonly SampleData data;
     private readonly bool compact;
+    private string imageIdentity = "";
+    private bool ownsImage;
     public CartLine Line { get; }
     public CartProductRow(SampleData data, CartLine line, bool inOrder = false)
     {
@@ -46,8 +48,13 @@ internal sealed class CartProductRow : BufferedPanel
         if (title.Text != Line.Product.Name) { title.Text = Line.Product.Name; details = true; }
         string currentPrice = $"{Line.Product.Price:N0}원";
         if (price.Text != currentPrice) { price.Text = currentPrice; details = true; }
-        Image currentImage = SampleImages.Catalog(Line.Product.Category);
-        if (!ReferenceEquals(image.Image, currentImage)) { image.Image = currentImage; details = true; }
+        string currentIdentity = ProductImages.Identity(Line.Product);
+        if (imageIdentity != currentIdentity)
+        {
+            var selected = ProductImages.Resolve(Line.Product);
+            if (ownsImage) image.Image?.Dispose();
+            image.Image = selected.Image; ownsImage = selected.Owned; imageIdentity = currentIdentity; details = true;
+        }
         if (quantity.Text != Line.Quantity.ToString()) quantity.Text = Line.Quantity.ToString();
         bool editable = !data.IsLocked(Line.Product);
         remove.Enabled = editable; if (minus != null) minus.Enabled = editable; if (plus != null) plus.Enabled = editable;
@@ -57,6 +64,8 @@ internal sealed class CartProductRow : BufferedPanel
     }
     public void Highlight(bool active)
     { BackColor = title.BackColor = price.BackColor = active ? Color.FromArgb(221, 238, 225) : Color.White; }
+    protected override void Dispose(bool disposing)
+    { if (disposing && ownsImage) image.Image?.Dispose(); base.Dispose(disposing); }
     private int Thumb => Math.Max(58, 66 * DeviceDpi / 96);
     private int PriceHeight(int rowWidth)
     {

@@ -33,13 +33,16 @@ ID/PW가 필요하면 Windows 보안 저장소를 사용한다. SQLite/settings.
 
 ## 남은 목업 상태
 
-`ui-state.json`은 창/열/글자 크기를 계속 저장한다. `catalog-state.json`은 이전 자료로만 읽고 새로 쓰지 않는다. 주문기록·배송/주문 진행·자격정보 저장·주문 사이트 자동화는 구현하지 않는다. MegaCoffee는 사용자가 입력한 상품 URL 한 건의 조회만 지원하고, 로그인 세션은 별도 브라우저 프로필에 저장하며 SQLite에는 넣지 않는다.
+`ui-state.json`은 창/열/글자 크기를 계속 저장한다. `catalog-state.json`은 이전 자료로만 읽고 새로 쓰지 않는다. 주문기록·배송/주문 진행·자격정보 저장·주문 사이트 자동화는 구현하지 않는다. MegaCoffee는 사용자가 입력한 상품 URL 조회와 XLSX의 URL 행 순차 조회만 지원하고, 로그인 세션은 별도 브라우저 프로필에 저장하며 SQLite에는 넣지 않는다.
 
 기존 `manual-images/{ProductId}.webp`는 원본대로 두고, 새 수동 이미지는 고유 파일명 WebP(중심 정사각 Crop/Quality 80)로 저장한다. DB에는 파일 경로만 보관한다.
 실제 MegaCoffee 상품 이미지는 `Mockup/web-images`에 같은 WebP 규칙으로 저장하며 수동 이미지가 우선한다.
+상품 카드·장바구니·주문 진행·목업 주문기록은 수동 이미지 → 저장된 웹 이미지 → 카테고리 placeholder 순서로 로컬 파일만 표시한다.
 
 ## XLSX 상품 입출력
 
 상품 탭의 기존 버튼은 SQLite `Products`에 저장된 상품만 `ProductId`, `Supplier`, `Name`, `Price`, `DisplayPrice`, `Category`, `ProductUrl`, `IsActive` 순서로 내보낸다. 삭제 상품은 `IsActive=false`로 포함하고, 미저장 샘플·Draft·장바구니·수동 이미지/내부 경로는 제외한다. 라이브러리는 ClosedXML이다.
 
 가져오기는 전체 행의 값·판매처·카테고리·URL·ID 중복/존재 여부를 먼저 검증한다. 빈 ID는 새 ID를 발급하고 기존 ID는 그대로 수정한다. 파일에 없는 상품은 삭제하지 않는다. 사용자 확인 후 `Data/backups`에 SQLite 백업을 만들고 모든 변경을 한 트랜잭션으로 반영한다. 실패 시 전체 롤백하며, 기존 상품의 수동 이미지 경로와 XLSX에 없는 내부 값은 유지한다. XLSX는 실행 DB가 아니다.
+
+필수 칸이 비고 `ProductUrl`이 있는 행은 MegaCoffee 공식 상품 URL만 조회한다. 검증된 상품명·가격·이미지·품절 상태를 사용하고, 카테고리는 분명한 명칭만 자동 분류하며 모호하면 `기타`로 둔다. `ProductId`가 있으면 해당 ID를 유지하고 수동 이미지는 보존한다. 모든 칸이 채워진 행은 웹 조회 없이 기존 가져오기 규칙을 따른다. 조회 이미지는 확인 전 임시 저장 후 취소/오류 시 정리하며, 확인 후 백업과 단일 트랜잭션으로 반영한다. 중복 URL이나 지원하지 않는 URL은 행 오류로 표시하고 DB를 바꾸지 않는다.

@@ -17,6 +17,7 @@ catalog-state.json
 ui-state.json
 manual-images/
 web-images/
+pending-images/
 Data/
 *.db
 *.db-*

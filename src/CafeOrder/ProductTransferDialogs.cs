@@ -6,7 +6,7 @@ internal interface IProductTransferDialogs
     string? ChooseImport(IWin32Window owner);
     bool Confirm(IWin32Window owner, ProductImportPlan plan);
     void Show(IWin32Window owner, string message, bool error);
-    void ShowIssues(IWin32Window owner, IReadOnlyList<ProductWorkbookIssue> issues);
+    void ShowIssues(IWin32Window owner, ProductImportPlan plan);
 }
 
 internal sealed class WinFormsProductTransferDialogs : IProductTransferDialogs
@@ -31,12 +31,12 @@ internal sealed class WinFormsProductTransferDialogs : IProductTransferDialogs
             "상품 XLSX 가져오기", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
     public void Show(IWin32Window owner, string message, bool error) =>
         MessageBox.Show(owner, message, "상품 XLSX", MessageBoxButtons.OK, error ? MessageBoxIcon.Error : MessageBoxIcon.Information);
-    public void ShowIssues(IWin32Window owner, IReadOnlyList<ProductWorkbookIssue> issues)
+    public void ShowIssues(IWin32Window owner, ProductImportPlan plan)
     {
-        using var dialog = new Form { Text = $"상품 XLSX 오류 {issues.Count}개 · DB 변경 없음", StartPosition = FormStartPosition.CenterParent,
+        using var dialog = new Form { Text = $"상품 XLSX · 추가 {plan.Added} · 수정 {plan.Updated} · 실패 {plan.Failed} · DB 변경 없음", StartPosition = FormStartPosition.CenterParent,
             Width = 680, Height = 420, MinimumSize = new Size(440, 260) };
         var details = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, WordWrap = false,
-            ScrollBars = ScrollBars.Both, Text = string.Join(Environment.NewLine, issues) };
+            ScrollBars = ScrollBars.Both, Text = string.Join(Environment.NewLine, plan.Issues) };
         var close = new Button { Text = "닫기", Dock = DockStyle.Bottom, Height = 40, DialogResult = DialogResult.OK };
         dialog.Controls.Add(details); dialog.Controls.Add(close); dialog.AcceptButton = close;
         dialog.ShowDialog(owner);

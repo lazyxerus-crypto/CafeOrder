@@ -6,21 +6,21 @@ internal static class OtherPages
     {
         var list = Ui.List("HistoryCards");
         AddHistory(data.Suppliers[0], "주문완료", "2026-09-15 14:20", "SAMPLE-001",
-            [(data.Products[0].Name, "14,500원", "2", "29,000원"), (data.Products[6].Name, "24,000원", "1", "24,000원")], "53,000원");
+            [(data.Products[0], "14,500원", "2", "29,000원"), (data.Products[6], "24,000원", "1", "24,000원")], "53,000원");
         AddHistory(data.Suppliers[6], "주문완료", "2026-09-14 10:35", "미확인",
-            [(data.Products[5].Name, "미확인", "미확인", "미확인")], "미확인");
+            [(data.Products[5], "미확인", "미확인", "미확인")], "미확인");
         AddHistory(data.Suppliers[4], "확인필요", "2026-09-14 09:10", "미확인",
-            [(data.Products[21].Name, "미확인", "미확인", "미확인")], "미확인");
+            [(data.Products[21], "미확인", "미확인", "미확인")], "미확인");
         return list;
         void AddHistory(Supplier supplier, string state, string time, string number,
-            (string Name, string Price, string Qty, string Amount)[] items, string total)
+            (Product Product, string Price, string Qty, string Amount)[] items, string total)
         {
             var header = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2 };
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 75)); header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             header.Controls.Add(Ui.SellerHeading(supplier), 0, 0);
             var status = Ui.Text(state, true); status.TextAlign = ContentAlignment.MiddleRight;
             status.ForeColor = state == "주문완료" ? Ui.Accent : Ui.Danger; header.Controls.Add(status, 1, 0);
-            var table = new HistoryItemsTable(items);
+            var table = new HistoryItemsTable(data, items);
             var payment = Ui.Role(Ui.Text($"총 결제 {total}", true), TypographyKey.HistoryInfo); payment.TextAlign = ContentAlignment.MiddleRight;
             list.Controls.Add(Ui.Column(header, Ui.Role(Ui.Text($"주문일시  {time}\n주문번호  {number}"), TypographyKey.HistoryInfo), table, payment));
         }

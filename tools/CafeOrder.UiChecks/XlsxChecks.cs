@@ -1,6 +1,7 @@
 using CafeOrder;
 using ClosedXML.Excel;
 using Microsoft.Data.Sqlite;
+using System.Drawing.Imaging;
 
 internal static partial class Program
 {
@@ -14,8 +15,8 @@ internal static partial class Program
         public string? ChooseImport(IWin32Window owner) => ImportPath;
         public bool Confirm(IWin32Window owner, ProductImportPlan plan) { Preview = plan; return AllowApply; }
         public void Show(IWin32Window owner, string message, bool error) => Messages.Add(message);
-        public void ShowIssues(IWin32Window owner, IReadOnlyList<ProductWorkbookIssue> issues) =>
-            Messages.Add($"오류 {issues.Count}개 · " + string.Join("; ", issues));
+        public void ShowIssues(IWin32Window owner, ProductImportPlan plan) =>
+            Messages.Add($"추가 {plan.Added} 수정 {plan.Updated} 실패 {plan.Failed} · " + string.Join("; ", plan.Issues));
     }
     private static void WriteProductRow(IXLWorksheet sheet, int row, int? id, string supplier, string name,
         decimal price, string display, string category, string url, bool active)
@@ -122,8 +123,13 @@ internal static partial class Program
             "First row rolled back when later insert failed"); }
         results.Add("XLSX: export/roundtrip, validation, duplicate/new IDs, backup, rollback, restart PASS");
     }
-    private static Task CheckXlsxUi(MainForm main)
+    private static async Task CheckXlsxUi(MainForm main)
     {
+        static async Task WaitFor(Func<bool> ready)
+        {
+            for (int i = 0; i < 100 && !ready(); i++) await Task.Delay(50);
+            Require(ready(), "XLSX UI operation finished");
+        }
         var data = Data(main); var grid = Find<ProductGrid>(main, "ProductList"); main.Size = new Size(1280, 720); main.Update();
         data.AddToCart(data.Products.Single(p => p.Id == 7));
         string path = MakeWorkbook(data.Store.DirectoryPath, "ui-import", sheet =>
@@ -132,14 +138,16 @@ internal static partial class Program
             WriteProductRow(sheet, 3, null, "메가커피", "XLSX 신규 원두", 8000, "8,000원", "원두", "https://www.megacoffee.co.kr/item/1", true);
         });
         var dialogs = new CheckTransferDialogs { ImportPath = path };
-        All(main).OfType<ProductsView>().Single().TransferDialogs = dialogs;
+        var view = All(main).OfType<ProductsView>().Single(); view.TransferDialogs = dialogs;
         grid.AutoScrollPosition = new Point(0, 80); Require(grid.AutoScrollPosition.Y < 0, "Import UI starts from scrolled catalog");
         dialogs.AllowApply = false; Find<Button>(main, "ImportProducts").PerformClick();
+        await WaitFor(() => dialogs.Preview != null && !view.importing);
         Require(data.Store.Database.ReadProducts(data.Suppliers).Count == 1 &&
             Directory.GetFiles(Path.Combine(data.Store.DirectoryPath, "Data", "backups"), "*before-xlsx-import*.db").Length == 0,
             "Declining confirmation creates no import backup or DB change");
         dialogs.AllowApply = true;
         Find<Button>(main, "ImportProducts").PerformClick();
+        await WaitFor(() => dialogs.Messages.Any(message => message.Contains("가져오기 완료")) && !view.importing);
         Require(dialogs.Preview is { Added: 1, Updated: 1, Deactivated: 0, Issues.Count: 0 } &&
             grid.AutoScrollPosition == Point.Empty && grid.Controls.OfType<ProductCard>().Any(c => c.Product?.Name == "XLSX 신규 원두"),
             "Import button confirms, creates card and returns scroll to top");
@@ -151,9 +159,46 @@ internal static partial class Program
         string bad = MakeWorkbook(data.Store.DirectoryPath, "ui-bad", sheet =>
         { WriteProductRow(sheet, 2, 7, "푸드레인", "무효 가격", 1, "1원", "원두", "", true); sheet.Cell(2, 4).Value = "bad"; });
         dialogs.ImportPath = bad; Find<Button>(main, "ImportProducts").PerformClick();
+        await WaitFor(() => dialogs.Messages.LastOrDefault()?.Contains("2행 · Price") == true && !view.importing);
         Require(dialogs.Messages.Last().Contains("2행 · Price") && data.Products.Single(p => p.Id == 7).Name == "XLSX 수정 원두",
             "Import button shows row/column errors without partial UI changes");
+        using var bitmap = new Bitmap(30, 30);
+        using (var graphics = Graphics.FromImage(bitmap)) graphics.Clear(Color.CornflowerBlue);
+        using var stream = new MemoryStream(); bitmap.Save(stream, ImageFormat.Png);
+        const string linkedUrl = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=79359";
+        string linked = MakeWorkbook(data.Store.DirectoryPath, "ui-linked", sheet => sheet.Cell(2, 7).Value = linkedUrl);
+        view.MegaLookup = async _ =>
+        {
+            await Task.Delay(60);
+            return new(MegaProductLookupStatus.Success, new MegaCoffeeProductSnapshot("테스트 원두 1kg", 15200,
+                "15,200원", linkedUrl,
+                "https://megacotr3116.cdn-nhncommerce.com/data/goods/16/08/11/79359/79359_magnify_047.jpg",
+                stream.ToArray(), true));
+        };
+        dialogs.ImportPath = linked;
+        Find<Button>(main, "ImportProducts").PerformClick();
+        Require(view.importing && Application.OpenForms.OfType<ProductImportProgressForm>().Any(),
+            "Link lookup shows responsive progress UI");
+        await WaitFor(() => !view.importing && data.Products.Any(product => product.Url == linkedUrl));
+        var linkedProduct = data.Products.Single(product => product.Url == linkedUrl);
+        Require(linkedProduct.Price == 15200 && linkedProduct.Category == "원두" && File.Exists(linkedProduct.ImageCachePath)
+            && grid.Items.Any(card => card.Product?.Id == linkedProduct.Id), "Link-only UI import saves and displays verified product");
+        data.AddToCart(linkedProduct);
+        var linkedImage = Find<PictureBox>(main, $"CartImage_{linkedProduct.Id}");
+        using (var copy = new Bitmap(linkedImage.Image!))
+            Require(copy.GetPixel(copy.Width / 2, copy.Height / 2).B > 100, "Imported image appears in cart immediately");
+
+        const string cancelUrl = "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=1000027811";
+        string cancelFile = MakeWorkbook(data.Store.DirectoryPath, "ui-cancel", sheet => sheet.Cell(2, 7).Value = cancelUrl);
+        view.MegaLookup = _ => new TaskCompletionSource<MegaProductLookupResult>().Task;
+        dialogs.ImportPath = cancelFile;
+        int beforeCancel = data.Store.Database.ReadProducts(data.Suppliers).Count;
+        Find<Button>(main, "ImportProducts").PerformClick();
+        var progress = Application.OpenForms.OfType<ProductImportProgressForm>().Single();
+        Find<Button>(progress, "").PerformClick();
+        await WaitFor(() => !view.importing);
+        Require(data.Store.Database.ReadProducts(data.Suppliers).Count == beforeCancel &&
+            dialogs.Messages.Last().Contains("취소"), "Cancel during lookup leaves DB unchanged");
         Capture(main, "13-xlsx-import-filtered");
-        return Task.CompletedTask;
     }
 }

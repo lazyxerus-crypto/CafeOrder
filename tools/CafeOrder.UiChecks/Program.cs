@@ -15,6 +15,16 @@ internal static partial class Program
     private static int Main(string[] args)
     {
         output = Path.GetFullPath(args.Length == 0 ? "artifacts/ui-checks" : args[0]); Directory.CreateDirectory(output);
+        if (args.Contains("--xlsx-lookup-check"))
+        {
+            try { CheckXlsxLookupAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: linked XLSX validation and rollback"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
+        if (args.Contains("--xlsx-live-check"))
+        {
+            try { CheckXlsxLiveAsync(output).GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("XLSX live check stopped: " + ex.Message); return 1; }
+        }
         if (args.Contains("--mega-parser-check"))
         {
             try { CheckMegaParserAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: MegaCoffee parser fixtures"); return 0; }
@@ -79,6 +89,7 @@ internal static partial class Program
             }
             CheckDatabase();
             CheckXlsx();
+            CheckXlsxLookupAsync().GetAwaiter().GetResult();
             if (args.Contains("--repro-six")) { Run(ReproSix); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             if (args.Contains("--repro-seven")) { Run(ReproSeven); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             SeedUiFixture();
@@ -148,6 +159,7 @@ internal static partial class Program
         Require(File.Exists(dialogs.ExportPath) && dialogs.Messages.Last().Contains("내보냈습니다"), "Existing export button creates an XLSX file");
         dialogs.ImportPath = dialogs.ExportPath;
         Find<Button>(main, "ImportProducts").PerformClick();
+        for (int i = 0; i < 100 && All(main).OfType<ProductsView>().Single().importing; i++) await Task.Delay(50);
         Require(dialogs.Preview is { Issues.Count: 0 } && dialogs.Messages.Last().Contains("가져오기 완료"), "Existing import button validates and confirms XLSX");
         var card = Find<ProductCard>(grid, "Product_1"); search.Text = "포모나";
         Require(!All(card).OfType<TextBox>().Any() && !All(card).OfType<Button>().Any(b => b.Text.Contains("장바구니")), "No copy textboxes or add button in normal cards");

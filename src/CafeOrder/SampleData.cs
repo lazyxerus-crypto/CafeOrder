@@ -26,7 +26,7 @@ public sealed class CartLine(Product product, int quantity)
     public int Quantity { get; set; } = quantity; // Used only for AUTO display and totals.
 }
 
-public sealed class SampleData
+public sealed partial class SampleData
 {
     public static readonly string[] Categories = ["전체", "원두", "일회용품", "유제품", "파우더", "베이스/농축액", "시럽/소스", "과일", "티백", "청", "디저트/스낵", "기타"];
     public List<Supplier> Suppliers { get; } =
@@ -143,12 +143,13 @@ public sealed class SampleData
         if (!Categories.Skip(1).Contains(category)) return;
         string previous = product.Category; product.Category = category;
         try { Store.Database.SaveProduct(product); } catch { product.Category = previous; throw; }
-        ProductChanged?.Invoke(product); CatalogChanged?.Invoke();
+        ProductChanged?.Invoke(product); CatalogChanged?.Invoke(); Notify();
     }
     public void SetManualImage(Product product, string? path)
     {
         string? previous = product.ManualImagePath; product.ManualImagePath = path;
         try { Store.Database.SaveProduct(product); } catch { product.ManualImagePath = previous; throw; }
+        ProductChanged?.Invoke(product); Notify();
     }
     public Product RegisterMock(string url, string category)
     {
@@ -180,37 +181,40 @@ public sealed class SampleData
     internal int ExportWorkbook(string path)
     { var rows = ExportRows(); Workbook().Export(path, rows); return rows.Length; }
     internal ProductImportPlan PrepareImport(string path)
+        => BuildImportPlan(Workbook().Import(path), null, null);
+    internal void ApplyImport(ProductImportPlan plan) => PublishImportedProducts(plan, WriteImport(plan));
+    internal async Task ApplyImportAsync(ProductImportPlan plan)
     {
-        var read = Workbook().Import(path); var issues = read.Issues.ToList(); var changes = new List<ProductImportChange>();
-        var known = Products.ToDictionary(p => p.Id); var stored = Store.Database.ReadProducts(Suppliers).Select(p => p.Id).ToHashSet();
-        var seen = new HashSet<int>();
-        foreach (var row in read.Rows)
-        {
-            var seller = Suppliers.Single(p => p.Name == row.Supplier || string.Equals(p.Id, row.Supplier, StringComparison.OrdinalIgnoreCase));
-            Product? existing = null;
-            if (row.ProductId is int id)
-            {
-                if (!seen.Add(id)) { issues.Add(new(row.SheetRow, "ProductId", "파일에서 중복된 상품 ID입니다.")); continue; }
-                if (!known.TryGetValue(id, out existing)) { issues.Add(new(row.SheetRow, "ProductId", "존재하지 않는 상품 ID입니다.")); continue; }
-            }
-            string? display = string.IsNullOrWhiteSpace(row.DisplayPrice) ? null : row.DisplayPrice;
-            Product proposed = existing == null
-                ? new Product(0, row.Name, row.Price, "", seller, row.Category, true, 0)
-                    { DisplayPrice = display, Url = row.ProductUrl, IsActive = row.IsActive, DataOrigin = "UserMock" }
-                : existing with { Name = row.Name, Price = row.Price, DisplayPrice = display, Supplier = seller,
-                    Category = row.Category, Url = row.ProductUrl, IsActive = row.IsActive };
-            if (existing != null && existing.Name == proposed.Name && existing.Price == proposed.Price &&
-                existing.PriceText == proposed.PriceText && existing.Supplier.Id == proposed.Supplier.Id &&
-                existing.Category == proposed.Category && existing.Url == proposed.Url && existing.IsActive == proposed.IsActive)
-                continue;
-            changes.Add(new(existing, proposed, existing != null && stored.Contains(existing.Id), row.SheetRow));
-        }
-        return new(changes, issues);
+        var written = await Task.Run(() => WriteImport(plan));
+        PublishImportedProducts(plan, written);
     }
-    internal void ApplyImport(ProductImportPlan plan)
+    private IReadOnlyList<Product> WriteImport(ProductImportPlan plan)
     {
         if (plan.Applied || plan.Issues.Count != 0) throw new InvalidDataException("검증되지 않았거나 이미 반영한 파일입니다.");
-        var written = Store.Database.ApplyImport(plan.Changes);
+        var moved = new List<string>();
+        IReadOnlyList<Product> written;
+        try
+        {
+            foreach (var change in plan.Changes.Where(change => change.PendingImagePath != null))
+            {
+                string final = change.Proposed.ImageCachePath!;
+                Directory.CreateDirectory(Path.GetDirectoryName(final)!);
+                if (!File.Exists(change.PendingImagePath))
+                    throw new InvalidDataException($"{change.SheetRow}행 · 이미지: 준비된 이미지가 없습니다. 다시 가져오세요.");
+                File.Move(change.PendingImagePath!, final);
+                moved.Add(final);
+            }
+            written = Store.Database.ApplyImport(plan.Changes);
+        }
+        catch
+        {
+            foreach (string path in moved) if (File.Exists(path)) File.Delete(path);
+            throw;
+        }
+        return written;
+    }
+    private void PublishImportedProducts(ProductImportPlan plan, IReadOnlyList<Product> written)
+    {
         plan.Applied = true;
         for (int index = 0; index < written.Count; index++)
         {
@@ -218,7 +222,9 @@ public sealed class SampleData
             if (existing == null) { Products.Add(product); continue; }
             existing.Name = product.Name; existing.Price = product.Price; existing.DisplayPrice = product.DisplayPrice;
             existing.Supplier = product.Supplier; existing.Category = product.Category; existing.Url = product.Url;
-            existing.IsActive = product.IsActive; ProductChanged?.Invoke(existing);
+            existing.IsActive = product.IsActive; existing.Available = product.Available;
+            existing.ImageUrl = product.ImageUrl; existing.ImageCachePath = product.ImageCachePath;
+            existing.ManualImagePath = product.ManualImagePath; ProductChanged?.Invoke(existing);
         }
         CatalogChanged?.Invoke();
         if (plan.Changes.Any(change => change.Existing != null && Cart.Any(line => line.Product.Id == change.Existing.Id))) Notify();

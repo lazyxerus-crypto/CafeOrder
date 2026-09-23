@@ -11,8 +11,8 @@ public sealed class ProductCard : Panel
     internal event Action? DeleteDraft;
     private TextBox? url;
     private readonly Button undo;
-    private Image? manual;
-    private Image? webImage;
+    private Image? selectedImage;
+    private bool ownsImage, manualImage;
     private string feedback = "";
     private bool pressed, dragging, flashing;
     private Point pressedAt;
@@ -170,10 +170,10 @@ public sealed class ProductCard : Panel
         }
         else
         {
-            var image = manual ?? webImage ?? SampleImages.Catalog(Product.Category);
+            var image = selectedImage ?? SampleImages.Catalog(Product.Category);
             // Both sources are square; manual files are center-cropped on import.
             g.DrawImage(image, ImageBounds);
-            if (manual != null)
+            if (manualImage)
             {
                 int badgeSize = Math.Max(22, Role(TypographyKey.Category, FontStyle.Bold).Height + 2);
                 var badge = new Rectangle(ImageBounds.Right - badgeSize - 4, ImageBounds.Top + 4, badgeSize, badgeSize);
@@ -225,7 +225,7 @@ public sealed class ProductCard : Panel
         var context = new ContextMenuStrip(); var product = Product;
         if (product is { IsActive: false }) return context;
         context.Items.Add("상품 삭제", null, (_, _) => { if (product == null) DeleteDraft?.Invoke(); else Run(() => data.SetActive(product, false)); });
-        var imageDelete = context.Items.Add("이미지 삭제", null, (_, _) => Run(RemoveManual)); imageDelete.Enabled = manual != null;
+        var imageDelete = context.Items.Add("이미지 삭제", null, (_, _) => Run(RemoveManual)); imageDelete.Enabled = manualImage;
         var categories = new ToolStripMenuItem("카테고리 변경");
         foreach (var category in SampleData.Categories.Skip(1))
         {
@@ -248,22 +248,11 @@ public sealed class ProductCard : Panel
         return context;
     }
     private void Copy(string text) { try { Clipboard.SetText(text); } catch (System.Runtime.InteropServices.ExternalException) { feedback = "복사하지 못했습니다"; Invalidate(); } }
-    private void LoadManual()
-    {
-        manual?.Dispose(); manual = null;
-        string? path = Product!.ManualImagePath;
-        if (path != null && File.Exists(path)) Run(() => manual = ManualImages.Load(path));
-    }
     private void LoadImages()
     {
-        LoadManual();
-        webImage?.Dispose(); webImage = null;
-        string? path = Product?.ImageCachePath;
-        if (path != null && File.Exists(path))
-        {
-            try { webImage = ManualImages.Load(path); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or ImageMagick.MagickException) { }
-        }
+        if (ownsImage) selectedImage?.Dispose();
+        var selection = ProductImages.Resolve(Product!);
+        selectedImage = selection.Image; ownsImage = selection.Owned; manualImage = selection.Manual;
     }
     internal void SetManual(string source)
     {
@@ -271,14 +260,14 @@ public sealed class ProductCard : Panel
         string path = data.Store.NewManualImagePath(Product.Id);
         try { ManualImages.Save(source, path); data.SetManualImage(Product, path); }
         catch { if (File.Exists(path)) File.Delete(path); throw; }
-        LoadManual(); Invalidate();
+        Invalidate();
     }
     internal void RemoveManual()
     {
         if (Product == null) return;
         string? previous = Product.ManualImagePath;
         data.SetManualImage(Product, null);
-        manual?.Dispose(); manual = null; Invalidate();
+        Invalidate();
         if (previous != null && File.Exists(previous)) File.Delete(previous);
     }
     protected override void OnDragEnter(DragEventArgs e) { base.OnDragEnter(e); dragging = true; pressed = false; UpdateDrop(e); }
@@ -291,7 +280,7 @@ public sealed class ProductCard : Panel
         dragging = false;
     }
     protected override void Dispose(bool disposing)
-    { if (disposing) { data.ProductChanged -= Changed; menu?.Dispose(); url?.ContextMenuStrip?.Dispose(); highlight.Dispose(); hover.Dispose(); hint.Dispose(); manual?.Dispose(); webImage?.Dispose(); } base.Dispose(disposing); }
+    { if (disposing) { data.ProductChanged -= Changed; menu?.Dispose(); url?.ContextMenuStrip?.Dispose(); highlight.Dispose(); hover.Dispose(); hint.Dispose(); if (ownsImage) selectedImage?.Dispose(); } base.Dispose(disposing); }
 }
 
 internal sealed class ProductGrid : BufferedPanel

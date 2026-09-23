@@ -7,7 +7,8 @@ namespace CafeOrder;
 internal enum MegaProductLookupStatus { Success, InvalidUrl, LoginRequired, Failed }
 internal sealed record MegaCoffeeProductSnapshot(string Name, decimal Price, string DisplayPrice,
     string ProductUrl, string ImageUrl, byte[] ImageBytes, bool Available);
-internal sealed record MegaProductLookupResult(MegaProductLookupStatus Status, MegaCoffeeProductSnapshot? Product = null);
+internal sealed record MegaProductLookupResult(MegaProductLookupStatus Status, MegaCoffeeProductSnapshot? Product = null,
+    string? Reason = null);
 internal sealed record MegaCoffeePageProduct(string Name, decimal Price, string DisplayPrice,
     string ProductUrl, Uri ImageUri, bool Available);
 
@@ -48,15 +49,15 @@ internal static class MegaCoffeeProductLookup
 
         var title = box.Locator(".item_detail_tit > span");
         var price = box.Locator("dl.item_price dd");
-        if (await title.CountAsync() != 1 || await price.CountAsync() != 1)
-            throw new InvalidDataException("상품명 또는 판매가를 확인할 수 없습니다.");
+        if (await title.CountAsync() != 1) throw new InvalidDataException("상품명을 확인할 수 없습니다.");
+        if (await price.CountAsync() != 1) throw new InvalidDataException("판매가를 확인할 수 없습니다.");
         string name = Normalize(await title.InnerTextAsync());
         string displayPrice = Normalize(await price.InnerTextAsync());
         var amount = Money.Match(displayPrice);
-        if (name.Length == 0 || name.Length > 500 || !amount.Success ||
-            !decimal.TryParse(amount.Groups[1].Value.Replace(",", ""), NumberStyles.None,
+        if (name.Length == 0 || name.Length > 500) throw new InvalidDataException("상품명을 확인할 수 없습니다.");
+        if (!amount.Success || !decimal.TryParse(amount.Groups[1].Value.Replace(",", ""), NumberStyles.None,
                 CultureInfo.InvariantCulture, out decimal numericPrice))
-            throw new InvalidDataException("상품명 또는 숫자 판매가를 확인할 수 없습니다.");
+            throw new InvalidDataException("숫자 판매가를 확인할 수 없습니다.");
 
         var cartButton = box.Locator("#cartBtn:visible");
         var orderButton = box.Locator("button.btn_add_order:visible");

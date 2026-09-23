@@ -17,6 +17,7 @@ public sealed class ProductsView : UserControl
     private readonly Dictionary<string, SupplierCartCard> supplierCards = [];
     private readonly Label emptyCart = Ui.Text("장바구니가 비었습니다.");
     private readonly Button orderAll;
+    internal bool importing;
     private readonly List<GridViewButton> columnButtons = [];
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal IProductTransferDialogs TransferDialogs { get; set; } = new WinFormsProductTransferDialogs();
@@ -136,23 +137,37 @@ public sealed class ProductsView : UserControl
         try { int count = data.ExportWorkbook(path); dialogs.Show(owner, $"상품 {count}개를 내보냈습니다.", false); }
         catch (Exception ex) when (ex is not OutOfMemoryException) { dialogs.Show(owner, "내보내기 실패: " + ex.Message, true); }
     }
-    private void ImportProducts()
+    private async void ImportProducts()
     {
+        if (importing) return;
         var dialogs = TransferDialogs; IWin32Window owner = (IWin32Window?)FindForm() ?? this;
         string? path = dialogs.ChooseImport(owner); if (path == null) return;
+        importing = true;
+        using var cancellation = new CancellationTokenSource();
+        using var progress = new ProductImportProgressForm(cancellation.Cancel);
+        progress.Show(FindForm());
         try
         {
-            var plan = data.PrepareImport(path);
+            var lookup = MegaLookup ?? (_ => Task.FromResult(new MegaProductLookupResult(MegaProductLookupStatus.Failed)));
+            using var plan = await data.PrepareImportAsync(path, lookup,
+                new Progress<string>(progress.SetStatus), cancellation.Token);
+            if (IsDisposed || cancellation.IsCancellationRequested) return;
             if (plan.Issues.Count != 0)
             {
-                dialogs.ShowIssues(owner, plan.Issues);
+                progress.Finish();
+                dialogs.ShowIssues(owner, plan);
                 return;
             }
+            progress.Hide();
             if (!dialogs.Confirm(owner, plan)) return;
-            data.ApplyImport(plan);
+            progress.SetApplying(); progress.Show(FindForm());
+            await data.ApplyImportAsync(plan);
+            if (IsDisposed) return;
             dialogs.Show(owner, $"가져오기 완료 · 추가 {plan.Added}개, 수정 {plan.Updated}개, 비활성 변경 {plan.Deactivated}개", false);
         }
+        catch (OperationCanceledException) { if (!IsDisposed) dialogs.Show(owner, "가져오기 취소 · DB 변경 없음", false); }
         catch (Exception ex) when (ex is not OutOfMemoryException) { dialogs.Show(owner, "가져오기 실패 · DB 반영을 완료하지 않았습니다.\n" + ex.Message, true); }
+        finally { progress.Finish(); importing = false; }
     }
     private void ProductChanged(Product _) => UpdateCount();
     private void UpdateCount() => count.Text = $"상품 {products.Items.Count(c => c.Product is { IsActive: true })}개";

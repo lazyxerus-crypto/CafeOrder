@@ -115,25 +115,69 @@ internal static partial class Program
             "Verified product and cached image are saved to SQLite");
         Require(oldProduct.Name == oldName && oldProduct.Price == oldPrice,
             "New MegaCoffee lookup does not overwrite an existing product");
-        var web = typeof(ProductCard).GetField("webImage", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var manual = typeof(ProductCard).GetField("manual", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        Require(web.GetValue(draft) is Image && manual.GetValue(draft) == null, "Cached web image is displayed");
+        var selected = typeof(ProductCard).GetField("selectedImage", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var manual = typeof(ProductCard).GetField("manualImage", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Require(selected.GetValue(draft) is Image && manual.GetValue(draft) is false, "Cached web image is displayed");
+
+        data.AddToCart(product);
+        var cartImage = Find<PictureBox>(main, $"CartImage_{product.Id}");
+        using var order = new OrderForm(data, [data.Cart.Single(line => line.Product.Id == product.Id)]);
+        var orderImage = Find<PictureBox>(order, $"CartImage_{product.Id}");
+        static Color Center(Image image)
+        { using var copy = new Bitmap(image); return copy.GetPixel(copy.Width / 2, copy.Height / 2); }
+        Require(Center(cartImage.Image!) == Center((Image)selected.GetValue(draft)!) &&
+            Center(orderImage.Image!) == Center(cartImage.Image!),
+            "Product, cart, and order use the same cached site image immediately");
 
         string manualSource = Path.Combine(data.Store.DirectoryPath, "test-manual.png");
         Directory.CreateDirectory(data.Store.DirectoryPath);
-        File.WriteAllBytes(manualSource, bytes.ToArray());
+        using (var manualBitmap = new Bitmap(40, 30))
+        {
+            using var g = Graphics.FromImage(manualBitmap); g.Clear(Color.Firebrick);
+            manualBitmap.Save(manualSource, ImageFormat.Png);
+        }
         draft.SetManual(manualSource);
-        Require(manual.GetValue(draft) is Image, "Manual image takes priority over cached web image");
+        Require(manual.GetValue(draft) is true && Center(cartImage.Image!).R > 140 &&
+            Center(cartImage.Image!).G < 100 && Center(orderImage.Image!) == Center(cartImage.Image!),
+            "Manual image immediately wins in product, cart, and open order");
         var reopened = new SampleData(new LocalState(data.Store.DirectoryPath));
         var persisted = reopened.Products.Single(p => p.Id == product.Id);
         Require(persisted.Name == snapshot.Name && persisted.Price == snapshot.Price && persisted.ImageCachePath == product.ImageCachePath
             && File.Exists(persisted.ManualImagePath), "Real product and manual image survive restart");
         draft.RemoveManual();
-        Require(manual.GetValue(draft) == null && web.GetValue(draft) is Image,
-            "Removing manual image immediately restores the cached site image");
+        Require(manual.GetValue(draft) is false && selected.GetValue(draft) is Image &&
+            Center(cartImage.Image!) == Center((Image)selected.GetValue(draft)!) &&
+            Center(orderImage.Image!) == Center(cartImage.Image!),
+            "Removing manual image immediately restores the cached site image everywhere");
+        var historyProduct = data.Products.Single(item => item.Id == 1);
+        string historyPath = data.Store.NewManualImagePath(historyProduct.Id);
+        ManualImages.Save(manualSource, historyPath);
+        data.SetManualImage(historyProduct, historyPath);
+        var historyImage = All(main).OfType<HistoryThumbnail>().Single(image => image.Product.Id == historyProduct.Id);
+        Require(Center(historyImage.Image!).R > 140 && Center(historyImage.Image!).G < 100,
+            "Existing order history row refreshes to the selected manual image");
+        var reopenedCart = new SampleData(new LocalState(data.Store.DirectoryPath));
+        using var restoredRow = new CartProductRow(reopenedCart, reopenedCart.Cart.Single(line => line.Product.Id == product.Id));
+        var restoredImage = Find<PictureBox>(restoredRow, $"CartImage_{product.Id}");
+        Require(Center(restoredImage.Image!) == Center(cartImage.Image!), "Cart image survives restart without web access");
+        int storedBeforeDraft = data.Store.Database.ReadProducts(data.Suppliers).Count;
         Find<Button>(main, "AddProduct").PerformClick();
         Require(new SampleData(new LocalState(data.Store.DirectoryPath)).Products.Count(p => p.Id == product.Id) == 1
-            && data.Store.Database.ReadProducts(data.Suppliers).Count == before + 1,
+            && data.Store.Database.ReadProducts(data.Suppliers).Count == storedBeforeDraft,
             "Unfinished draft is never persisted");
+        foreach (var supplier in data.Suppliers)
+        {
+            var item = data.Products.First(candidate => candidate.Supplier.Id == supplier.Id && candidate.Available);
+            data.AddToCart(item);
+            Require(Find<Control>(main, $"Cart_{supplier.Id}") != null, "Every supplier retains its cart card");
+            var thumb = Find<PictureBox>(main, $"CartImage_{item.Id}");
+            var expected = ProductImages.Resolve(item);
+            try { Require(Center(thumb.Image!) == Center(expected.Image), "Cart image selection matches product for " + supplier.Id); }
+            finally { if (expected.Owned) expected.Image.Dispose(); }
+        }
+        var placeholderProduct = data.Products.Single(item => item.Id == 6);
+        data.SetCategory(placeholderProduct, "기타");
+        Require(ReferenceEquals(Find<PictureBox>(main, $"CartImage_{placeholderProduct.Id}").Image,
+            SampleImages.Catalog("기타")), "Cart placeholder follows category changes immediately");
     }
 }

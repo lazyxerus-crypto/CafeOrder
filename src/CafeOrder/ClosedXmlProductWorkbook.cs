@@ -90,22 +90,29 @@ internal sealed class ClosedXmlProductWorkbook : IProductWorkbook
                     else id = (int)parsedId;
                 }
                 string supplier = cells[1].GetString().Trim(), name = cells[2].GetString();
-                if (!suppliers.Any(item => item.Name == supplier || string.Equals(item.Id, supplier, StringComparison.OrdinalIgnoreCase)))
-                    issues.Add(new(row, "Supplier", "등록된 판매처만 입력해주세요."));
-                if (string.IsNullOrWhiteSpace(name)) issues.Add(new(row, "Name", "상품명을 입력해주세요."));
-                if (!TryNumber(cells[3], out decimal price) || price < 0)
-                    issues.Add(new(row, "Price", "0 이상의 숫자여야 합니다."));
                 string display = cells[4].GetString(), category = cells[5].GetString().Trim(), url = cells[6].GetString().Trim();
-                if (!categories.Skip(1).Contains(category)) issues.Add(new(row, "Category", "고정 카테고리 중 하나를 입력해주세요."));
+                bool lookup = url.Length != 0 && (supplier.Length == 0 || string.IsNullOrWhiteSpace(name) ||
+                    cells[3].IsEmpty() || cells[3].GetString().Trim().Length == 0 || category.Length == 0 || cells[7].IsEmpty());
+                decimal price = 0;
+                if (!lookup)
+                {
+                    if (!suppliers.Any(item => item.Name == supplier || string.Equals(item.Id, supplier, StringComparison.OrdinalIgnoreCase)))
+                        issues.Add(new(row, "Supplier", "등록된 판매처만 입력해주세요."));
+                    if (string.IsNullOrWhiteSpace(name)) issues.Add(new(row, "Name", "상품명을 입력해주세요."));
+                    if (!TryNumber(cells[3], out price) || price < 0)
+                        issues.Add(new(row, "Price", "0 이상의 숫자여야 합니다."));
+                    if (!categories.Skip(1).Contains(category)) issues.Add(new(row, "Category", "고정 카테고리 중 하나를 입력해주세요."));
+                }
                 if (url.Length != 0 && (!Uri.TryCreate(url, UriKind.Absolute, out var parsedUrl) ||
                     (parsedUrl.Scheme != Uri.UriSchemeHttp && parsedUrl.Scheme != Uri.UriSchemeHttps) ||
                     parsedUrl.Host.Length == 0 || parsedUrl.UserInfo.Length != 0))
                     issues.Add(new(row, "ProductUrl", "비워두거나 정상적인 http/https URL을 입력해주세요."));
                 bool active = false;
-                if (cells[7].DataType == XLDataType.Boolean) active = cells[7].GetBoolean();
+                if (lookup) active = true;
+                else if (cells[7].DataType == XLDataType.Boolean) active = cells[7].GetBoolean();
                 else if (cells[7].DataType != XLDataType.Text || !bool.TryParse(cells[7].GetString().Trim(), out active))
                     issues.Add(new(row, "IsActive", "true 또는 false만 입력해주세요."));
-                if (issues.Count == before) rows.Add(new(id, supplier, name, price, display, category, url, active, row));
+                if (issues.Count == before) rows.Add(new(id, supplier, name, price, display, category, url, active, row, lookup));
             }
             return new(rows, issues);
         }

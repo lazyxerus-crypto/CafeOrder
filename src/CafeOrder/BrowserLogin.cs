@@ -156,6 +156,7 @@ internal sealed class SupplierSessionManager : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) { return new(MegaProductLookupStatus.Failed); }
+        catch (InvalidDataException ex) { return new(MegaProductLookupStatus.Failed, Reason: ex.Message); }
         catch (Exception) { return new(MegaProductLookupStatus.Failed); }
         finally
         {
