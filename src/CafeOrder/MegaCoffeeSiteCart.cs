@@ -4,7 +4,8 @@ using Microsoft.Playwright;
 
 namespace CafeOrder;
 
-internal sealed record SiteCartEntry(string ExternalProductId, int Quantity, string OptionKey, string Name);
+internal sealed record SiteCartEntry(string ExternalProductId, int Quantity, string OptionKey, string Name,
+    decimal? UnitPrice = null);
 internal sealed record SiteCartPreparationResult(string State, string Reason, IReadOnlyList<SiteCartEntry>? Existing = null);
 
 internal static class MegaCoffeeSiteCart

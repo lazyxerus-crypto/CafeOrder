@@ -32,7 +32,9 @@ internal sealed partial class CatalogDatabase
                 if (!current.Read() || current.GetInt32(0) != target.Quantity ||
                     !string.Equals(ProductUrlIdentity.Key(supplierId, current.GetString(1)),
                         ProductUrlIdentity.Key(supplierId, target.ProductUrl), StringComparison.OrdinalIgnoreCase) ||
-                    supplierId == "mega" && ProductUrlIdentity.MegaGoodsNo(supplierId, target.ProductUrl) != target.ExternalProductId)
+                    supplierId == "mega" && ProductUrlIdentity.MegaGoodsNo(supplierId, target.ProductUrl) != target.ExternalProductId ||
+                    supplierId == "piece" && (!PieceCakeProductLookup.TryProductUrl(target.ProductUrl, out _, out var pieceNo) ||
+                        pieceNo != target.ExternalProductId))
                     throw new InvalidDataException("주문 시작 전 장바구니 상품 또는 수량이 변경됐습니다.");
                 Execute(db, tx, """
                     INSERT INTO SiteCartAttemptItems(AttemptId,ProductId,ExternalProductId,ProductUrl,Name,Quantity,Price,OptionKey)

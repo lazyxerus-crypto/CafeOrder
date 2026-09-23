@@ -6,6 +6,7 @@ public sealed class ProductCard : Panel
     public Product? Product;
     private readonly SampleData data;
     private readonly Func<string, Task<MegaProductLookupResult>>? megaLookup;
+    private readonly Func<string, Task<MegaProductLookupResult>>? pieceLookup;
     private string draftCategory;
     internal event Action? Registered;
     internal event Action? DeleteDraft;
@@ -53,8 +54,14 @@ public sealed class ProductCard : Panel
 
     internal ProductCard(Product? product, SampleData data, string draftCategory,
         Func<string, Task<MegaProductLookupResult>>? megaLookup)
+        : this(product, data, draftCategory, megaLookup, null) { }
+
+    internal ProductCard(Product? product, SampleData data, string draftCategory,
+        Func<string, Task<MegaProductLookupResult>>? megaLookup,
+        Func<string, Task<MegaProductLookupResult>>? pieceLookup)
     {
-        this.data = data; this.megaLookup = megaLookup; Product = product; this.draftCategory = draftCategory;
+        this.data = data; this.megaLookup = megaLookup; this.pieceLookup = pieceLookup;
+        Product = product; this.draftCategory = draftCategory;
         Name = product == null ? "Draft_" + Guid.NewGuid().ToString("N") : $"Product_{product.Id}";
         DoubleBuffered = true; ResizeRedraw = true; BackColor = Color.White; AllowDrop = true; Margin = Padding.Empty; TabStop = true;
         undo = Ui.Button("되돌리기", () => Run(() => data.SetActive(Product!, true)), name: "UndoProduct");
@@ -89,6 +96,7 @@ public sealed class ProductCard : Panel
     {
         if (url == null || string.IsNullOrWhiteSpace(url.Text)) return;
         if (MegaCoffeeProductLookup.IsMegaHost(url.Text)) { _ = RegisterMegaDraftAsync(); return; }
+        if (PieceCakeProductLookup.IsPieceHost(url.Text)) { _ = RegisterSiteDraftAsync("piece"); return; }
         void Register()
         {
             Product = data.RegisterMock(url.Text, draftCategory); Name = $"Product_{Product.Id}";
@@ -96,24 +104,28 @@ public sealed class ProductCard : Panel
         }
         Run(() => { if (Parent is ProductGrid grid) grid.UpdateInPlace(Register); else Register(); });
     }
-    internal async Task RegisterMegaDraftAsync()
+    internal Task RegisterMegaDraftAsync() => RegisterSiteDraftAsync("mega");
+
+    private async Task RegisterSiteDraftAsync(string supplierId)
     {
         if (url == null || !url.Enabled || string.IsNullOrWhiteSpace(url.Text)) return;
-        if (megaLookup == null) { feedback = "메가커피 조회를 사용할 수 없습니다"; Invalidate(); return; }
+        var lookup = supplierId == "mega" ? megaLookup : pieceLookup;
+        string supplierName = supplierId == "mega" ? "메가커피" : "파미유";
+        if (lookup == null) { feedback = supplierName + " 조회를 사용할 수 없습니다"; Invalidate(); return; }
         string requestedUrl = url.Text.Trim();
         url.Enabled = false; feedback = "조회 중"; Invalidate();
         string? imagePath = null;
         bool lookupSucceeded = false, imageSaved = false;
         try
         {
-            var result = await megaLookup(requestedUrl);
+            var result = await lookup(requestedUrl);
             if (IsDisposed || url == null) return;
             if (result.Status != MegaProductLookupStatus.Success || result.Product == null)
             {
                 feedback = result.Status switch
                 {
-                    MegaProductLookupStatus.InvalidUrl => "메가커피 상품 URL을 확인해주세요",
-                    MegaProductLookupStatus.LoginRequired => "메가커피 로그인이 필요합니다",
+                    MegaProductLookupStatus.InvalidUrl => supplierName + " 상품 URL을 확인해주세요",
+                    MegaProductLookupStatus.LoginRequired => supplierName + " 로그인이 필요합니다",
                     _ => "상품을 확인하지 못했습니다. 다시 시도해주세요"
                 };
                 return;
@@ -125,7 +137,7 @@ public sealed class ProductCard : Panel
             if (IsDisposed || url == null) return;
             void Register()
             {
-                Product = data.RegisterMegaProduct(result.Product, draftCategory, imagePath);
+                Product = data.RegisterLookupProduct(result.Product, supplierId, draftCategory, imagePath);
                 imagePath = null; Name = $"Product_{Product.Id}";
                 url.ContextMenuStrip?.Dispose(); url.Dispose(); url = null;
                 LoadImages(); SyncState(); PerformLayout(); Registered?.Invoke();
@@ -138,7 +150,7 @@ public sealed class ProductCard : Panel
             data.Store.Log.Write(LogLevel.ERROR,
                 !lookupSucceeded ? "PRODUCT_LOOKUP_EXCEPTION" : imageSaved ? "PRODUCT_SAVE_FAILED" : "IMAGE_SAVE_FAILED",
                 !lookupSucceeded ? "상품조회 도중 예외가 발생했습니다." : imageSaved ? "조회한 상품을 DB에 등록하지 못했습니다." : "조회한 상품 이미지를 WebP로 저장하지 못했습니다.",
-                supplier: "mega", result: "FAILED", error: ex);
+                supplier: supplierId, result: "FAILED", error: ex);
             feedback = "상품 저장에 실패했습니다. 다시 시도해주세요";
         }
         finally

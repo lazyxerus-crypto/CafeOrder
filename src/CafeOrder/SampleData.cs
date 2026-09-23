@@ -43,6 +43,7 @@ public sealed partial class SampleData
     public event Action? CartChanged;
     public event Action<Product>? ProductAdded;
     internal event Action<Product, CartLine>? FirstMegaCartAdded;
+    internal event Action<Product, CartLine>? FirstPieceCartAdded;
     public event Action<Product>? ProductChanged;
     public event Action? CatalogChanged;
     public LocalState Store { get; }
@@ -94,6 +95,19 @@ public sealed partial class SampleData
             if (index < 0) Products.Add(saved);
             else Products[index] = saved with { SampleOrderCount = Products[index].SampleOrderCount };
         }
+        foreach (var product in Products)
+        {
+            if (!PieceCakeProductLookup.TryNormalizeLegacy(product, out string name, out string priceText)) continue;
+            try
+            {
+                Store.Database.SaveProduct(product with { Name = name, DisplayPrice = priceText });
+                product.Name = name; product.DisplayPrice = priceText;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            { Store.Log.Write(LogLevel.ERROR, "PRODUCT_DISPLAY_MIGRATION_FAILED",
+                "기존 파미유 상품의 이름·가격 표시를 변환하지 못해 원래 값을 유지했습니다.",
+                supplier: "piece", productId: product.Id, result: "FAILED", error: ex); }
+        }
         Cart.AddRange(Store.Database.ReadCart(Products));
     }
 
@@ -113,12 +127,16 @@ public sealed partial class SampleData
             supplier: p.Supplier.Id, productId: p.Id, result: "SUCCESS");
         Notify();
         ProductAdded?.Invoke(p);
-        if ((first || !IsMegaCartLookupPending(p)) && p.Supplier.Id == "mega" &&
-            MegaCoffeeProductLookup.TryProductUrl(p.Url, out _, out _) &&
+        if ((first || !IsMegaCartLookupPending(p)) &&
+            (p.Supplier.Id == "mega" && MegaCoffeeProductLookup.TryProductUrl(p.Url, out _, out _) ||
+             p.Supplier.Id == "piece" && PieceCakeProductLookup.TryProductUrl(p.Url, out _, out _)) &&
             (p.LastSuccessfulCheckAtUtc is not { } checkedAt ||
                 DateTimeOffset.UtcNow - checkedAt < TimeSpan.Zero ||
                 DateTimeOffset.UtcNow - checkedAt >= TimeSpan.FromHours(24)))
-            FirstMegaCartAdded?.Invoke(p, line);
+        {
+            if (p.Supplier.Id == "mega") FirstMegaCartAdded?.Invoke(p, line);
+            else FirstPieceCartAdded?.Invoke(p, line);
+        }
     }
     public void ChangeQuantity(CartLine line, int change)
     {
@@ -180,8 +198,8 @@ public sealed partial class SampleData
     }
     public Product RegisterMock(string url, string category)
     {
-        if (MegaCoffeeProductLookup.IsMegaHost(url))
-            throw new ArgumentException("메가커피 실제 상품은 로그인된 페이지 조회 후 등록해야 합니다.");
+        if (MegaCoffeeProductLookup.IsMegaHost(url) || PieceCakeProductLookup.IsPieceHost(url))
+            throw new ArgumentException("실제 상품은 로그인된 페이지 조회 후 등록해야 합니다.");
         var seller = DetectSupplier(url) ?? throw new ArgumentException("지원하지 않는 상품 링크입니다");
         var source = Products.First(p => p.Supplier.Id == seller.Id);
         var product = Store.Database.InsertProduct(new Product(0, source.Name, source.Price, source.PriceNote, seller, category, true, 0)
@@ -192,10 +210,18 @@ public sealed partial class SampleData
         return product; // The same draft control adopts this record without refreshing or sorting the catalog.
     }
     internal Product RegisterMegaProduct(MegaCoffeeProductSnapshot snapshot, string category, string imagePath)
+        => RegisterLookupProduct(snapshot, "mega", category, imagePath);
+
+    internal Product RegisterLookupProduct(MegaCoffeeProductSnapshot snapshot, string supplierId,
+        string category, string imagePath)
     {
         if (!Categories.Skip(1).Contains(category) || !File.Exists(imagePath))
             throw new ArgumentException("상품 분류 또는 이미지 파일이 올바르지 않습니다.");
-        var seller = Suppliers.Single(s => s.Id == "mega");
+        if (supplierId == "mega" && !MegaCoffeeProductLookup.TryProductUrl(snapshot.ProductUrl, out _, out _) ||
+            supplierId == "piece" && !PieceCakeProductLookup.TryProductUrl(snapshot.ProductUrl, out _, out _) ||
+            supplierId is not ("mega" or "piece"))
+            throw new ArgumentException("상품 URL과 판매처가 일치하지 않습니다.");
+        var seller = Suppliers.Single(s => s.Id == supplierId);
         var product = Store.Database.InsertProduct(new Product(0, snapshot.Name, snapshot.Price, "", seller, category, snapshot.Available, 0)
         {
             Url = snapshot.ProductUrl, DisplayPrice = snapshot.DisplayPrice,
@@ -203,8 +229,8 @@ public sealed partial class SampleData
             LastSuccessfulCheckAtUtc = DateTimeOffset.UtcNow
         });
         Products.Add(product);
-        Store.Log.Write(LogLevel.INFO, "PRODUCT_REGISTERED", "실제 조회한 메가커피 상품을 로컬 DB에 등록했습니다.",
-            supplier: seller.Id, productId: product.Id, result: "SUCCESS", reason: "MEGA_LOOKUP");
+        Store.Log.Write(LogLevel.INFO, "PRODUCT_REGISTERED", $"실제 조회한 {seller.Name} 상품을 로컬 DB에 등록했습니다.",
+            supplier: seller.Id, productId: product.Id, result: "SUCCESS", reason: supplierId.ToUpperInvariant() + "_LOOKUP");
         return product;
     }
     private IProductWorkbook Workbook() => new ClosedXmlProductWorkbook(Suppliers, Categories);

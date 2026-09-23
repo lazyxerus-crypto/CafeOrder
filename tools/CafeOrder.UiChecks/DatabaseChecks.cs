@@ -59,6 +59,20 @@ internal static partial class Program
             !MegaCoffeeSiteCart.Matches([new("79359", 4, "", first.Name)], [target]) &&
             !MegaCoffeeSiteCart.Matches([new("79359", 5, "다른 옵션", first.Name)], [target]),
             "Site cart verification requires exact goodsNo, option and quantity");
+        var piece = data.Products.Single(p => p.Id == 24);
+        piece.Url = "https://www.piececake.co.kr/product/product_view?prodNo=PD2637";
+        data.Store.Database.SaveProduct(piece);
+        data.AddToCart(piece);
+        var pieceTarget = new SiteCartTarget(piece.Id, "PD2637", piece.Url, piece.Name, 1, piece.Price, "BOX:30");
+        var pieceAttempt = data.Store.Database.CreateSiteCartAttempt("piece", [pieceTarget]);
+        Require(pieceAttempt.Targets.Single().OptionKey == "BOX:30", "PieceCake cart snapshot retains purchase unit");
+        try
+        {
+            data.Store.Database.CreateSiteCartAttempt("piece", [pieceTarget with { ExternalProductId = "PD2624" }]);
+            throw new Exception("Wrong PieceCake product number was accepted");
+        }
+        catch (InvalidDataException) { }
+        data.Remove(data.Cart.Single(line => line.Product.Id == piece.Id));
         again.ChangeQuantity(again.Cart.Single(l => l.Product.Id == 7), -2);
         Require(new SampleData(new LocalState(directory)).Cart.Single(l => l.Product.Id == 7).Quantity == 3, "AUTO +/- persists without a site request");
         again.SetActive(again.Products.Single(p => p.Id == 21), true); again.SetManualImage(again.Products.Single(p => p.Id == 7), null);

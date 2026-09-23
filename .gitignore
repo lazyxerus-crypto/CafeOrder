@@ -49,6 +49,8 @@ playwright-report/
 test-results/
 *cookies*
 *session*
+!src/CafeOrder/PieceCakeProductSession.cs
+!src/CafeOrder/PieceCakeSiteCartSession.cs
 *storageState*
 *storage-state*
 *.dpapi

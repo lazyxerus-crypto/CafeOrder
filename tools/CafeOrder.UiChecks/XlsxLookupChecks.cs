@@ -173,7 +173,7 @@ internal static partial class Program
                 lookups == beforeWrongOwnerLookups,
                 "Wrong ProductId and supplier pointing at registered goodsNo skip and name the existing owner without lookup");
         string unsupported = MakeWorkbook(dir, "linked-unsupported", sheet =>
-        { sheet.Cell(2, 7).Value = third; sheet.Cell(3, 7).Value = "https://www.piececake.co.kr/product/product_view?prodNo=PD2637"; });
+        { sheet.Cell(2, 7).Value = third; sheet.Cell(3, 7).Value = "https://foodrain.com/items/H000001104"; });
         using (var plan = await data.PrepareImportAsync(unsupported, Lookup, null, CancellationToken.None))
             Require(plan.Issues.Any(issue => issue.Row == 3 && issue.Reason.Contains("지원하지")), "Unsupported supplier is identified by row");
         string malformed = MakeWorkbook(dir, "linked-malformed", sheet => sheet.Cell(2, 7).Value =

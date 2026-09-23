@@ -72,7 +72,10 @@ internal sealed partial class SupplierSessionManager : IAsyncDisposable
     {
         this.profileRoot = profileRoot ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeOrder", "BrowserProfiles");
         this.credentials = credentials ?? new NoStoredLoginCredentials();
-        this.probes = probes ?? new() { ["mega"] = new MegaCoffeeLoginProbe() };
+        this.probes = probes ?? new()
+        {
+            ["mega"] = new MegaCoffeeLoginProbe(), ["piece"] = new PieceCakeLoginProbe()
+        };
         this.log = log;
     }
 

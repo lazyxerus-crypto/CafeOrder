@@ -20,6 +20,39 @@ internal static partial class Program
             try { MegaSiteCartManualChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
             catch (Exception ex) { Console.WriteLine("Manual cart window stopped: " + ex.GetType().Name); return 1; }
         }
+        if (args.Contains("--piece-readonly"))
+        {
+            try { PieceReadOnlyChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("PieceCake read-only check stopped: " + ex.GetType().Name); return 1; }
+        }
+        if (args.Contains("--piece-cart-live-check"))
+        {
+            try
+            {
+                PieceSiteCartLiveChecks.RunAsync().GetAwaiter().GetResult(); return 0;
+            }
+            catch (Exception ex) { Console.WriteLine("PieceCake live cart check stopped: " + ex.Message); return 1; }
+        }
+        if (args.Contains("--piece-parser-check"))
+        {
+            try { CheckPieceParserAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: PieceCake product and cart parser fixtures"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
+        if (args.Contains("--piece-xlsx-check"))
+        {
+            try { CheckPieceXlsxAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: PieceCake XLSX URL import and SQLite restore"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
+        if (args.Contains("--piece-login-interactive"))
+        {
+            try { PieceLoginChecks.RunAsync(true).GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("PieceCake login stopped: " + ex.GetType().Name); return 1; }
+        }
+        if (args.Contains("--piece-login-readonly"))
+        {
+            try { PieceLoginChecks.RunAsync(false).GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("PieceCake session check stopped: " + ex.GetType().Name); return 1; }
+        }
         if (args.Contains("--mega-site-readonly"))
         {
             try { MegaSiteCartReadOnlyChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
@@ -120,6 +153,8 @@ internal static partial class Program
             CheckDatabase();
             CheckXlsx();
             CheckXlsxLookupAsync().GetAwaiter().GetResult();
+            CheckPieceXlsxAsync().GetAwaiter().GetResult();
+            CheckPieceParserAsync().GetAwaiter().GetResult();
             CheckMegaCartRefreshAsync().GetAwaiter().GetResult();
             CheckImageSaveRules();
             CheckOperationalLogAsync().GetAwaiter().GetResult();
@@ -132,6 +167,7 @@ internal static partial class Program
             Run(CheckOffscreen);
             Run(CheckXlsxUi, CheckDirectory("xlsx-ui"));
             Run(CheckMegaDraft, CheckDirectory("mega-draft"));
+            Run(CheckPieceDraft, CheckDirectory("piece-draft"));
             string logUi = CheckDirectory("log-ui");
             Run(CheckLogUi, logUi);
             Run(CheckLogRestart, logUi);
