@@ -8,7 +8,7 @@ internal sealed partial class SupplierSessionManager
     {
         if (!NuldamProductLookup.TryProductUrl(url, out var uri, out var productNumber))
         {
-            log?.Write(LogLevel.WARN, "PRODUCT_LOOKUP_FAILED", "늘담 상품 URL 형식이 올바르지 않습니다.",
+            log?.Write(LogLevel.WARN, "PRODUCT_LOOKUP_FAILED", "널담 상품 URL 형식이 올바르지 않습니다.",
                 supplier: "nuldam", result: "FAILED", reason: "INVALID_URL");
             return Task.FromResult(new MegaProductLookupResult(MegaProductLookupStatus.InvalidUrl));
         }
@@ -30,8 +30,8 @@ internal sealed partial class SupplierSessionManager
         var result = await task;
         log?.Write(result.Status == MegaProductLookupStatus.Success ? LogLevel.INFO : LogLevel.WARN,
             result.Status == MegaProductLookupStatus.Success ? "PRODUCT_LOOKUP_SUCCESS" : "PRODUCT_LOOKUP_FAILED",
-            result.Status == MegaProductLookupStatus.Success ? "늘담 상품정보와 이미지를 확인했습니다." :
-                result.Reason ?? "늘담 상품 조회를 완료하지 못했습니다.",
+            result.Status == MegaProductLookupStatus.Success ? "널담 상품정보와 이미지를 확인했습니다." :
+                result.Reason ?? "널담 상품 조회를 완료하지 못했습니다.",
             supplier: "nuldam", result: result.Status == MegaProductLookupStatus.Success ? "SUCCESS" : "FAILED",
             reason: result.Status == MegaProductLookupStatus.Success ? null : result.Status.ToString().ToUpperInvariant());
         return result;
@@ -66,7 +66,7 @@ internal sealed partial class SupplierSessionManager
                     return new(MegaProductLookupStatus.LoginRequired);
                 }
                 if (state != SupplierLoginState.LoggedIn)
-                    return new(MegaProductLookupStatus.Failed, Reason: "늘담 로그인 상태를 확인할 수 없습니다.");
+                    return new(MegaProductLookupStatus.Failed, Reason: "널담 로그인 상태를 확인할 수 없습니다.");
                 cancel.Token.ThrowIfCancellationRequested();
                 var product = await NuldamProductLookup.FetchAsync(page, context, uri, productNumber, probe);
                 await vault.SaveAsync(context, probe.HomeUrl);
@@ -89,7 +89,7 @@ internal sealed partial class SupplierSessionManager
         { return new(MegaProductLookupStatus.Failed, Reason: ex.Message, ErrorType: ex.GetType().Name); }
         catch (Exception ex)
         {
-            log?.Write(LogLevel.ERROR, "PRODUCT_LOOKUP_EXCEPTION", "늘담 조회 중 브라우저 또는 파일 처리가 실패했습니다.",
+            log?.Write(LogLevel.ERROR, "PRODUCT_LOOKUP_EXCEPTION", "널담 조회 중 브라우저 또는 파일 처리가 실패했습니다.",
                 supplier: "nuldam", result: "FAILED", error: ex);
             return new(MegaProductLookupStatus.Failed, ErrorType: ex.GetType().Name);
         }

@@ -34,7 +34,7 @@ public sealed partial class SampleData
     [
         new("mega", "메가커피", false, 50000), new("piece", "파미유", false, 99000),
         new("food", "푸드레인", false, 0), new("wym", "우양", false, 30000),
-        new("nuldam", "늘담", false, 100000), new("coupang", "쿠팡", true, 0),
+        new("nuldam", "널담", false, 100000), new("coupang", "쿠팡", true, 0),
         new("naver", "네이버 스마트스토어", true, 0)
     ];
     public List<Product> Products { get; } = [];

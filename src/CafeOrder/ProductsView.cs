@@ -247,13 +247,13 @@ public sealed class ProductsView : UserControl
         }
         if (groups.Length == 0 && emptyCart.Parent == null) cart.Controls.Add(emptyCart);
         else if (groups.Length != 0 && emptyCart.Parent != null) cart.Controls.Remove(emptyCart);
-        orderAll.Enabled = data.Cart.Count != 0 && data.Cart.All(data.CanStartLocalOrder);
+        orderAll.Enabled = data.Cart.Any(data.CanStartLocalOrder);
     }
     internal static void AddRow(TableLayoutPanel card, Control control)
     { card.RowStyles.Add(new RowStyle(SizeType.AutoSize)); card.Controls.Add(control, 0, card.RowCount++); }
     private void OpenOrders(CartLine[] lines)
     {
-        if (lines.Length == 0 || lines.Any(line => !data.CanStartLocalOrder(line))) return;
+        if (lines.Length == 0 || !lines.Any(data.CanStartLocalOrder)) return;
         using var dialog = new OrderForm(data, lines) { Sessions = sessions }; dialog.ShowDialog(FindForm());
     }
 }

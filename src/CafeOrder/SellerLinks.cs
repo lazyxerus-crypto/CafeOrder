@@ -26,6 +26,23 @@ internal static class SellerLinks
         try { Launch(new ProcessStartInfo(valid) { UseShellExecute = true }); }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { /* An unavailable OS handler must not mutate catalog/cart state. */ }
     }
+    internal static bool OpenManualProduct(Product product)
+    {
+        if (!product.Supplier.Manual ||
+            !Uri.TryCreate(product.Url, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("https" or "http") || uri.UserInfo.Length != 0 ||
+            !((product.Supplier.Id == "coupang" && uri.Host is "www.coupang.com" or "mc.coupang.com") ||
+              (product.Supplier.Id == "naver" && uri.Host is "smartstore.naver.com" or "brand.naver.com")))
+            return false;
+        try
+        {
+            // Keep the original product link, including store path and vendorItemId/query parameters.
+            Launch(new ProcessStartInfo(product.Url) { UseShellExecute = true });
+            return true;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        { return false; }
+    }
 }
 
 internal sealed class SellerIcon : PictureBox

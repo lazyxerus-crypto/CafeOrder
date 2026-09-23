@@ -79,6 +79,26 @@ internal sealed partial class SupplierSessionManager
             result = new("UNKNOWN", ex.GetType().Name);
         }
         database.SetSiteCartAttemptState(attempt.AttemptId, result.State, result.Reason);
+        if (result.Reason is "SITE_CART_ITEM_MISMATCH" or "SITE_CART_MISMATCH")
+        {
+            static string Item(string code, int quantity, string option) =>
+                code + "×" + quantity + (option.Length == 0 ? "" : " [" + option + "]");
+            string expected = string.Join(",", attempt.Targets.Select(item =>
+                Item(item.ExternalProductId, item.Quantity, item.OptionKey)));
+            string actual = result.Existing == null ? "읽기 실패" : string.Join(",", result.Existing.Select(item =>
+                Item(item.ExternalProductId, item.Quantity, item.OptionKey)));
+            string mismatch = result.Existing == null ? "현재 목록 확인 실패" : string.Join(",",
+                attempt.Targets.Where(item => !result.Existing.Any(found =>
+                    found.ExternalProductId == item.ExternalProductId &&
+                    found.OptionKey == item.OptionKey && found.Quantity == item.Quantity))
+                    .Select(item => item.ExternalProductId).Concat(result.Existing.Where(found =>
+                    !attempt.Targets.Any(item => item.ExternalProductId == found.ExternalProductId &&
+                    item.OptionKey == found.OptionKey && item.Quantity == found.Quantity))
+                    .Select(item => item.ExternalProductId)).Distinct());
+            log?.Write(LogLevel.WARN, "SITE_CART_MISMATCH_DETAIL",
+                $"메가커피 장바구니 비교 불일치: 기대 {expected}; 실제 {actual}; 불일치 상품 {mismatch}; 마지막 확인 단계 {result.LastVerifiedStage}.",
+                supplier: "mega", result: result.State, reason: result.Reason);
+        }
         log?.Write(result.State == "READY" ? LogLevel.INFO : LogLevel.WARN,
             result.State == "READY" ? "SITE_CART_VERIFIED" : "SITE_CART_PREPARE_STOPPED",
             result.State == "READY" ? "메가커피 사이트 장바구니 상품·옵션·수량을 검증했습니다." :

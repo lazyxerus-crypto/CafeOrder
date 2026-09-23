@@ -54,6 +54,7 @@ test-results/
 !src/CafeOrder/PieceCakeSiteCartSession.cs
 !src/CafeOrder/NuldamProductSession.cs
 !src/CafeOrder/NuldamSiteCartSession.cs
+!src/CafeOrder/SiteCartReviewSession.cs
 *storageState*
 *storage-state*
 *.dpapi

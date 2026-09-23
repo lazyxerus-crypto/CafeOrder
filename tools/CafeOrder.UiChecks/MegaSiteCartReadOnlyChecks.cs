@@ -21,7 +21,8 @@ internal static class MegaSiteCartReadOnlyChecks
             var items = await MegaCoffeeSiteCart.ReadAsync(page, login);
             if (items.Any(item => item.Quantity < 1 || string.IsNullOrWhiteSpace(item.ExternalProductId)))
                 throw new InvalidDataException("Site cart identity or quantity missing");
-            Console.WriteLine("Current site cart item count=" + items.Count);
+            Console.WriteLine("Current site cart: " + string.Join(", ",
+                items.Select(item => item.ExternalProductId + "×" + item.Quantity)));
             var clear = page.Locator("#frmCart button").Filter(new() { HasText = "장바구니 비우기" });
             bool hiddenFrame = await page.Locator("iframe[name='ifrmProcess']").CountAsync() == 1;
             bool confirmThenFrame = await page.EvaluateAsync<bool>("""

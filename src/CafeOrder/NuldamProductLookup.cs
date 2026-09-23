@@ -40,14 +40,14 @@ internal static partial class NuldamProductLookup
         string productNumber, NuldamLoginProbe login)
     {
         if (!TryProductUrl(url.ToString(), out _, out string requested) || requested != productNumber)
-            throw new InvalidDataException("늘담 상품 URL과 상품 코드가 일치하지 않습니다.");
+            throw new InvalidDataException("널담 상품 URL과 상품 코드가 일치하지 않습니다.");
         var navigation = await page.GotoAsync(url.ToString(), new()
         { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 20000 });
         var state = await login.CheckAsync(page);
         if (state == SupplierLoginState.LoginRequired) throw new MegaCoffeeLoginRequiredException();
         if (navigation?.Status != 200 || state != SupplierLoginState.LoggedIn ||
             !TryProductUrl(page.Url, out _, out string actual) || actual != productNumber)
-            throw new InvalidDataException("늘담 상품 페이지 또는 로그인 상태를 확인할 수 없습니다.");
+            throw new InvalidDataException("널담 상품 페이지 또는 로그인 상태를 확인할 수 없습니다.");
         await page.WaitForFunctionAsync("""
             () => !!document.querySelector('.headingArea h2')?.textContent.trim() &&
               !!document.querySelector('#span_product_price_text')?.textContent.trim() &&
@@ -56,33 +56,33 @@ internal static partial class NuldamProductLookup
         if (await page.Locator(".headingArea h2").CountAsync() != 1 ||
             await page.Locator("#span_product_price_text").CountAsync() != 1 ||
             await page.Locator("img.BigImage").CountAsync() != 1)
-            throw new InvalidDataException("늘담 상품명·가격·이미지 영역을 확인할 수 없습니다.");
+            throw new InvalidDataException("널담 상품명·가격·이미지 영역을 확인할 수 없습니다.");
         string name = Normalize(await page.Locator(".headingArea h2").InnerTextAsync());
         string displayedPrice = Normalize(await page.Locator("#span_product_price_text").InnerTextAsync());
         string metaName = Normalize(await page.Locator("meta[property='og:title']").GetAttributeAsync("content") ?? "");
         if (name.Length is 0 or > 500 || metaName != name)
-            throw new InvalidDataException("늘담 상품명을 화면과 메타정보에서 함께 확인할 수 없습니다.");
+            throw new InvalidDataException("널담 상품명을 화면과 메타정보에서 함께 확인할 수 없습니다.");
         var priceMatch = PriceText.Match(displayedPrice);
         if (!priceMatch.Success || !decimal.TryParse(priceMatch.Groups[1].Value.Replace(",", ""),
             NumberStyles.None, CultureInfo.InvariantCulture, out decimal price))
-            throw new InvalidDataException("늘담 숫자 판매가를 확인할 수 없습니다.");
+            throw new InvalidDataException("널담 숫자 판매가를 확인할 수 없습니다.");
         bool addVisible = await page.Locator("a.sub_cart.move:visible").CountAsync() == 1;
         bool soldVisible = await page.Locator(".sub_soldout.move:visible").CountAsync() == 1;
-        if (addVisible == soldVisible) throw new InvalidDataException("늘담 품절 상태를 확인할 수 없습니다.");
+        if (addVisible == soldVisible) throw new InvalidDataException("널담 품절 상태를 확인할 수 없습니다.");
         int initialQuantity = 0;
         if (addVisible)
         {
             if (await page.Locator("#quantity[name='quantity_opt[]']").CountAsync() != 1 ||
                 !int.TryParse(await page.Locator("#quantity").InputValueAsync(), NumberStyles.None,
                     CultureInfo.InvariantCulture, out initialQuantity) || initialQuantity <= 0)
-                throw new InvalidDataException("늘담 주문 수량 입력 상태를 확인할 수 없습니다.");
+                throw new InvalidDataException("널담 주문 수량 입력 상태를 확인할 수 없습니다.");
         }
         string? imageSource = await page.Locator("img.BigImage").GetAttributeAsync("src");
         if (imageSource == null || !Uri.TryCreate(url, imageSource, out var imageUri) ||
             imageUri.Scheme != Uri.UriSchemeHttps || imageUri.Host is not ("nuldampartners.com" or "www.nuldampartners.com") ||
             !imageUri.AbsolutePath.StartsWith("/web/product/big/", StringComparison.Ordinal) ||
             imageUri.UserInfo.Length != 0 || imageUri.Fragment.Length != 0)
-            throw new InvalidDataException("늘담 상품 이미지 주소를 확인할 수 없습니다.");
+            throw new InvalidDataException("널담 상품 이미지 주소를 확인할 수 없습니다.");
         return new(name, price, displayedPrice, url.ToString(), imageUri, addVisible,
             PackageKey(name), initialQuantity, await page.Locator("select:visible").CountAsync() != 0);
     }
@@ -96,10 +96,10 @@ internal static partial class NuldamProductLookup
         if (response.Status != 200 || !response.Headers.TryGetValue("content-type", out string? contentType) ||
             !new[] { "image/jpeg", "image/png", "image/webp" }.Any(type =>
                 contentType.StartsWith(type, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidDataException("늘담 상품 이미지 파일을 확인할 수 없습니다.");
+            throw new InvalidDataException("널담 상품 이미지 파일을 확인할 수 없습니다.");
         byte[] image = await response.BodyAsync();
         if (image.Length is < 100 or > 8_000_000)
-            throw new InvalidDataException("늘담 상품 이미지 크기를 확인할 수 없습니다.");
+            throw new InvalidDataException("널담 상품 이미지 크기를 확인할 수 없습니다.");
         return new(product.Name, product.Price, product.DisplayPrice, product.ProductUrl,
             product.ImageUri.ToString(), image, product.Available);
     }

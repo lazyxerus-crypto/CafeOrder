@@ -22,7 +22,7 @@ internal static class NuldamSiteCartLiveChecks
             page = context.Pages.FirstOrDefault() ?? await context.NewPageAsync();
             await page.GotoAsync(login.HomeUrl, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 20000 });
             if (await login.CheckAsync(page) != SupplierLoginState.LoggedIn)
-                throw new InvalidDataException("늘담 로그인이 필요합니다.");
+                throw new InvalidDataException("널담 로그인이 필요합니다.");
             var before = await NuldamSiteCart.ReadAsync(page, login);
             Console.WriteLine("Nuldam before=" + Snapshot(before));
             const string code = "250";

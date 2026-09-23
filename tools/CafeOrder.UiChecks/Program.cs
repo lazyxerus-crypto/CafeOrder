@@ -98,6 +98,22 @@ internal static partial class Program
             try { CheckImageSaveRules(); Console.WriteLine("PASS: image save rules"); return 0; }
             catch (Exception ex) { Console.WriteLine(ex); return 1; }
         }
+        if (args.Contains("--order-local-check"))
+        {
+            try { CheckOrderFlowLocal(); Console.WriteLine("PASS: order snapshots, Mega cart matching and manual URLs"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
+        if (args.Contains("--mega-stale-read-check"))
+        {
+            try { CheckMegaCartDelayedReadAsync().GetAwaiter().GetResult();
+                Console.WriteLine("PASS: MegaCoffee delayed cart reads without repeated writes"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
+        if (args.Contains("--checkout-open-readonly"))
+        {
+            try { CheckCheckoutWindowsReadOnlyAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
         if (args.Contains("--log-check"))
         {
             try { CheckOperationalLogAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: operational log storage"); return 0; }
@@ -179,6 +195,8 @@ internal static partial class Program
             CheckMegaCartRefreshAsync().GetAwaiter().GetResult();
             CheckImageSaveRules();
             CheckOperationalLogAsync().GetAwaiter().GetResult();
+            CheckOrderFlowLocal();
+            CheckMegaCartDelayedReadAsync().GetAwaiter().GetResult();
             if (args.Contains("--repro-six")) { Run(ReproSix); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             if (args.Contains("--repro-seven")) { Run(ReproSeven); File.WriteAllLines(Path.Combine(output, "repro.txt"), results); return 0; }
             SeedUiFixture();
@@ -310,11 +328,15 @@ internal static partial class Program
                 order.Size = size; order.Update();
                 foreach (var remove in All(order).OfType<Button>().Where(b => b.Name.StartsWith("Remove_"))) Require(remove.Parent!.ClientRectangle.Contains(remove.Bounds) && remove.Right <= remove.Parent.Width - 4, "Complete X border with right padding");
                 foreach (var orderCard in Find<FlowLayoutPanel>(order, "OrderCards").Controls.Cast<Control>())
-                { var action = orderCard.Controls.OfType<Button>().Single(); Require(orderCard.Height - action.Bottom == orderCard.Padding.Bottom + action.Margin.Bottom, "Content-fit card padding"); }
+                { var actions = orderCard.Controls.OfType<FlowLayoutPanel>().Single(); Require(orderCard.Height - actions.Bottom == orderCard.Padding.Bottom + actions.Margin.Bottom, "Content-fit card padding"); }
             }
             Capture(order, "10-order-x-padding");
             var target = data.Cart.Single(l => l.Product.Id == 1); var before = target.Quantity; Find<Button>(order, "Plus_1").PerformClick(); Require(target.Quantity == before + 1, "Shared order quantity");
-            Find<Button>(order, "StartAllOrders").PerformClick(); Require(data.IsLocked(target.Product), "Order start still locks edits"); order.Close();
+            Find<Button>(order, "StartAllOrders").PerformClick();
+            Require(data.Cart.Contains(target) && !data.IsLocked(target.Product) &&
+                All(order).OfType<Label>().All(label => !label.Text.Contains("주문 완료", StringComparison.Ordinal)),
+                "A disconnected or manual card never mock-completes or removes a local cart item");
+            order.Close();
         }
         Require(data.Cart.All(l => !data.IsLocked(l.Product)), "Order close releases locks");
         tabs.SelectedIndex = 3; Find<Button>(main, "CopyAllLogs").PerformClick(); Require(Clipboard.GetText() == Find<RichTextBox>(main, "LogText").Text, "Log copy local feedback");

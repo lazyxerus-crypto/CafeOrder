@@ -6,6 +6,7 @@ internal sealed record SiteCartTarget(int ProductId, string ExternalProductId, s
     string Name, int Quantity, decimal Price, string OptionKey = "");
 internal sealed record SiteCartAttempt(string AttemptId, string SupplierId,
     IReadOnlyList<SiteCartTarget> Targets);
+internal sealed record StoredSiteCartAttempt(SiteCartAttempt Attempt, string State, string? Reason);
 
 internal sealed partial class CatalogDatabase
 {
@@ -60,6 +61,61 @@ internal sealed partial class CatalogDatabase
                 UPDATE SiteCartAttempts SET State=$state, Reason=$reason, UpdatedAtUtc=$now WHERE AttemptId=$id
                 """, ("$state", state), ("$reason", reason),
                 ("$now", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture)), ("$id", attemptId));
+            if (Number(db, tx, "SELECT changes()") != 1)
+                throw new InvalidDataException("사이트 장바구니 진행 기록을 찾을 수 없습니다.");
+            return 0;
+        });
+    }
+
+    internal StoredSiteCartAttempt? ReadLatestSiteCartAttempt(string supplierId,
+        IReadOnlyList<SiteCartTarget> currentTargets) => Access<StoredSiteCartAttempt?>(db =>
+    {
+        using var latest = Command(db, null, """
+            SELECT AttemptId,State,Reason FROM SiteCartAttempts WHERE SupplierId=$supplier
+            ORDER BY CreatedAtUtc DESC, rowid DESC LIMIT 1
+            """, ("$supplier", supplierId));
+        using var header = latest.ExecuteReader();
+        if (!header.Read()) return null;
+        string id = header.GetString(0), state = header.GetString(1);
+        string? reason = header.IsDBNull(2) ? null : header.GetString(2);
+        header.Close();
+        using var items = Command(db, null, """
+            SELECT ProductId,ExternalProductId,ProductUrl,Name,Quantity,Price,OptionKey
+            FROM SiteCartAttemptItems WHERE AttemptId=$id
+            """, ("$id", id));
+        using var rows = items.ExecuteReader();
+        var saved = new List<SiteCartTarget>();
+        while (rows.Read())
+            saved.Add(new(rows.GetInt32(0), rows.GetString(1), rows.GetString(2),
+                rows.GetString(3), rows.GetInt32(4),
+                decimal.Parse(rows.GetString(5), CultureInfo.InvariantCulture), rows.GetString(6)));
+        if (saved.Count != currentTargets.Count) return null;
+        var byId = currentTargets.ToDictionary(target => target.ProductId);
+        if (!saved.All(item => byId.TryGetValue(item.ProductId, out var current) &&
+            item.ExternalProductId == current.ExternalProductId && item.Quantity == current.Quantity &&
+            item.Price == current.Price && item.OptionKey == current.OptionKey &&
+            ProductUrlIdentity.Key(supplierId, item.ProductUrl) == ProductUrlIdentity.Key(supplierId, current.ProductUrl)))
+            return null;
+        return new(new(id, supplierId, saved), state, reason);
+    });
+
+    internal bool LatestSiteCartBrowserOpened(string supplierId) => Access(db =>
+    {
+        using var command = Command(db, null, """
+            SELECT Reason FROM SiteCartAttempts WHERE SupplierId=$supplier
+            ORDER BY CreatedAtUtc DESC, rowid DESC LIMIT 1
+            """, ("$supplier", supplierId));
+        return command.ExecuteScalar() as string == "BROWSER_OPENED";
+    });
+
+    internal void MarkSiteCartBrowserOpened(string attemptId)
+    {
+        Write((db, tx) =>
+        {
+            Execute(db, tx, """
+                UPDATE SiteCartAttempts SET Reason='BROWSER_OPENED',UpdatedAtUtc=$now WHERE AttemptId=$id
+                """, ("$now", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture)),
+                ("$id", attemptId));
             if (Number(db, tx, "SELECT changes()") != 1)
                 throw new InvalidDataException("사이트 장바구니 진행 기록을 찾을 수 없습니다.");
             return 0;

@@ -26,7 +26,7 @@ internal static partial class NuldamSiteCart
             throw new MegaCoffeeLoginRequiredException();
         if (response?.Status != 200 || new Uri(page.Url).AbsolutePath != CartUrl.AbsolutePath ||
             await page.Locator(".xans-order-basketpackage").CountAsync() == 0)
-            throw new InvalidDataException("늘담 장바구니 페이지를 확인할 수 없습니다.");
+            throw new InvalidDataException("널담 장바구니 페이지를 확인할 수 없습니다.");
         var quantityInputs = page.Locator("input[id^='quantity_id_']");
         int count = await quantityInputs.CountAsync();
         if (count == 0)
@@ -35,7 +35,7 @@ internal static partial class NuldamSiteCart
             var empty = page.Locator(".xans-order-empty:visible, .xans-order-basketpackage .empty:visible");
             if (await empty.CountAsync() == 0 ||
                 !(await empty.First.InnerTextAsync()).Contains("장바구니", StringComparison.Ordinal))
-                throw new InvalidDataException("늘담 빈 장바구니 상태를 확인할 수 없습니다.");
+                throw new InvalidDataException("널담 빈 장바구니 상태를 확인할 수 없습니다.");
             return [];
         }
         var result = new List<SiteCartEntry>(count);
@@ -43,21 +43,21 @@ internal static partial class NuldamSiteCart
         {
             var row = quantityInputs.Nth(index).Locator("xpath=ancestor::tr[1]");
             if (await row.CountAsync() != 1 || await row.Locator(".option:visible").CountAsync() != 0)
-                throw new InvalidDataException("늘담 장바구니 상품의 선택 옵션을 확인할 수 없습니다.");
+                throw new InvalidDataException("널담 장바구니 상품의 선택 옵션을 확인할 수 없습니다.");
             var links = row.Locator("a[href*='product_no=']");
             if (await links.CountAsync() == 0)
-                throw new InvalidDataException("늘담 장바구니 상품 링크를 확인할 수 없습니다.");
+                throw new InvalidDataException("널담 장바구니 상품 링크를 확인할 수 없습니다.");
             var ids = new HashSet<string>(StringComparer.Ordinal);
             for (int linkIndex = 0; linkIndex < await links.CountAsync(); linkIndex++)
             {
                 string? href = await links.Nth(linkIndex).GetAttributeAsync("href");
                 if (href == null || !NuldamProductLookup.TryProductUrl(new Uri(CartUrl, href).ToString(), out _, out string id))
-                    throw new InvalidDataException("늘담 장바구니 상품 코드를 확인할 수 없습니다.");
+                    throw new InvalidDataException("널담 장바구니 상품 코드를 확인할 수 없습니다.");
                 ids.Add(id);
             }
             if (ids.Count != 1 || await row.Locator("a.ec-product-name").CountAsync() != 1 ||
                 await row.Locator("div[id^='product_price_div']").CountAsync() != 1)
-                throw new InvalidDataException("늘담 장바구니 상품명 또는 단가를 확인할 수 없습니다.");
+                throw new InvalidDataException("널담 장바구니 상품명 또는 단가를 확인할 수 없습니다.");
             string name = Normalize(await row.Locator("a.ec-product-name").InnerTextAsync());
             string priceText = Normalize(await row.Locator("div[id^='product_price_div']").InnerTextAsync());
             var priceMatch = Won.Match(priceText);
@@ -66,7 +66,7 @@ internal static partial class NuldamSiteCart
                     CultureInfo.InvariantCulture, out decimal unitPrice) ||
                 !int.TryParse(await quantityInputs.Nth(index).InputValueAsync(), NumberStyles.None,
                     CultureInfo.InvariantCulture, out int quantity) || quantity <= 0)
-                throw new InvalidDataException("늘담 장바구니 상품 단가 또는 주문 수량을 확인할 수 없습니다.");
+                throw new InvalidDataException("널담 장바구니 상품 단가 또는 주문 수량을 확인할 수 없습니다.");
             result.Add(new(ids.Single(), quantity, NuldamProductLookup.PackageKey(name), name, unitPrice));
         }
         return result;

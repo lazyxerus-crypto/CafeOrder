@@ -79,8 +79,8 @@ public sealed partial class SampleData
                 {
                     string reason = result.Status switch
                     {
-                        MegaProductLookupStatus.LoginRequired => (isMega ? "메가커피" : isPiece ? "파미유" : "늘담") + " 로그인이 필요합니다.",
-                        MegaProductLookupStatus.InvalidUrl => (isMega ? "메가커피" : isPiece ? "파미유" : "늘담") + " 상품 URL이 올바르지 않습니다.",
+                        MegaProductLookupStatus.LoginRequired => (isMega ? "메가커피" : isPiece ? "파미유" : "널담") + " 로그인이 필요합니다.",
+                        MegaProductLookupStatus.InvalidUrl => (isMega ? "메가커피" : isPiece ? "파미유" : "널담") + " 상품 URL이 올바르지 않습니다.",
                         _ => result.Reason ?? "상품 조회에 실패했습니다. 상품명·가격·이미지·품절 상태를 확인해주세요."
                     };
                     issues.Add(new(row.SheetRow, "ProductUrl", reason));
@@ -192,7 +192,7 @@ public sealed partial class SampleData
                 // A different goodsNo is a new product, never a replacement for the old ProductId.
                 if (!megaUrl && !pieceUrl && !nuldamUrl)
                 {
-                    issues.Add(new(row.SheetRow, "ProductUrl", "새 상품 URL은 메가커피·파미유·늘담 실제 조회만 지원합니다."));
+                    issues.Add(new(row.SheetRow, "ProductUrl", "새 상품 URL은 메가커피·파미유·널담 실제 조회만 지원합니다."));
                     continue;
                 }
                 selected = row with { ProductId = null, LookupRequested = true };
@@ -207,7 +207,7 @@ public sealed partial class SampleData
                     : PieceCakeProductLookup.IsPieceHost(row.ProductUrl)
                     ? "파미유 상품 URL 형식이 올바르지 않습니다."
                     : NuldamProductLookup.IsNuldamHost(row.ProductUrl)
-                    ? "늘담 상품 URL 형식이 올바르지 않습니다."
+                    ? "널담 상품 URL 형식이 올바르지 않습니다."
                     : "이 판매처의 URL 조회는 아직 지원하지 않습니다.";
                 issues.Add(new(row.SheetRow, "ProductUrl", reason)); continue;
             }

@@ -31,7 +31,7 @@ internal static class NuldamLoginChecks
                 }
                 await Task.Delay(1500, timeout.Token);
             }
-            throw new InvalidDataException("늘담 로그인 완료를 확인하지 못했습니다.");
+            throw new InvalidDataException("널담 로그인 완료를 확인하지 못했습니다.");
         }
         finally { await context.CloseAsync(); }
     }

@@ -22,7 +22,7 @@ CafeOrder는 여러 카페 식자재 쇼핑몰의 상품을 한 프로그램에�
 | PieceCake / 파미유 | AUTO | [PIECECAKE](suppliers/PIECECAKE.md) |
 | FoodRain | AUTO | [FOODRAIN](suppliers/FOODRAIN.md) |
 | WYM / 우양 | AUTO | [WYM](suppliers/WYM.md) |
-| Nuldam Partners / 늘담 | AUTO | [NULDAM](suppliers/NULDAM.md) |
+| Nuldam Partners / 널담 | AUTO | [NULDAM](suppliers/NULDAM.md) |
 | Coupang, Naver SmartStore | MANUAL_BROWSER | [COUPANG_NAVER](suppliers/COUPANG_NAVER.md) |
 
 ## 범위 제한

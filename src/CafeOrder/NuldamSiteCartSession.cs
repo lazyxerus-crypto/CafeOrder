@@ -7,7 +7,7 @@ internal sealed partial class SupplierSessionManager
     internal Task<SiteCartPreparationResult> PrepareNuldamSiteCartAsync(SiteCartAttempt attempt,
         CatalogDatabase database)
     {
-        if (attempt.SupplierId != "nuldam") throw new ArgumentException("늘담 주문 대상이 아닙니다.");
+        if (attempt.SupplierId != "nuldam") throw new ArgumentException("널담 주문 대상이 아닙니다.");
         lock (sync)
         {
             if (disposed) throw new ObjectDisposedException(nameof(SupplierSessionManager));
@@ -66,15 +66,15 @@ internal sealed partial class SupplierSessionManager
         { Publish("nuldam", SupplierLoginState.LoginRequired); result = new("FAILED", "LOGIN_REQUIRED"); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            log?.Write(LogLevel.ERROR, "SITE_CART_PREPARE_EXCEPTION", "늘담 사이트 장바구니 준비를 완료하지 못했습니다.",
+            log?.Write(LogLevel.ERROR, "SITE_CART_PREPARE_EXCEPTION", "널담 사이트 장바구니 준비를 완료하지 못했습니다.",
                 supplier: "nuldam", result: "UNKNOWN", error: ex);
             result = new("UNKNOWN", ex.GetType().Name);
         }
         database.SetSiteCartAttemptState(attempt.AttemptId, result.State, result.Reason);
         log?.Write(result.State == "READY" ? LogLevel.INFO : LogLevel.WARN,
             result.State == "READY" ? "SITE_CART_VERIFIED" : "SITE_CART_PREPARE_STOPPED",
-            result.State == "READY" ? "늘담 사이트 장바구니 상품·구매 단위·수량·가격을 검증했습니다." :
-                "늘담 사이트 장바구니 준비를 중단했습니다.", supplier: "nuldam",
+            result.State == "READY" ? "널담 사이트 장바구니 상품·구매 단위·수량·가격을 검증했습니다." :
+                "널담 사이트 장바구니 준비를 중단했습니다.", supplier: "nuldam",
             result: result.State, reason: result.Reason);
         return result;
     }

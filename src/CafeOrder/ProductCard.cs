@@ -119,7 +119,7 @@ public sealed class ProductCard : Panel
     {
         if (url == null || !url.Enabled || string.IsNullOrWhiteSpace(url.Text)) return;
         var lookup = supplierId switch { "mega" => megaLookup, "piece" => pieceLookup, _ => nuldamLookup };
-        string supplierName = supplierId switch { "mega" => "메가커피", "piece" => "파미유", _ => "늘담" };
+        string supplierName = supplierId switch { "mega" => "메가커피", "piece" => "파미유", _ => "널담" };
         if (lookup == null) { feedback = supplierName + " 조회를 사용할 수 없습니다"; Invalidate(); return; }
         string requestedUrl = url.Text.Trim();
         url.Enabled = false; feedback = "조회 중"; Invalidate();

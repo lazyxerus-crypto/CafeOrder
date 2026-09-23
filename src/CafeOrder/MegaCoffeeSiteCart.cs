@@ -6,7 +6,8 @@ namespace CafeOrder;
 
 internal sealed record SiteCartEntry(string ExternalProductId, int Quantity, string OptionKey, string Name,
     decimal? UnitPrice = null);
-internal sealed record SiteCartPreparationResult(string State, string Reason, IReadOnlyList<SiteCartEntry>? Existing = null);
+internal sealed record SiteCartPreparationResult(string State, string Reason, IReadOnlyList<SiteCartEntry>? Existing = null,
+    string LastVerifiedStage = "PRECHECK");
 
 internal static class MegaCoffeeSiteCart
 {
@@ -15,7 +16,8 @@ internal static class MegaCoffeeSiteCart
 
     internal static bool Matches(IReadOnlyList<SiteCartEntry> actual, IReadOnlyList<SiteCartTarget> target)
     {
-        if (actual.Count != target.Count) return false;
+        if (actual.Count != target.Count || target.Select(x => (x.ExternalProductId, x.OptionKey)).Distinct().Count() != target.Count)
+            return false;
         var expected = target.ToDictionary(x => (x.ExternalProductId, x.OptionKey), x => x.Quantity);
         return actual.Select(x => (x.ExternalProductId, x.OptionKey)).Distinct().Count() == actual.Count &&
             actual.All(x => expected.TryGetValue((x.ExternalProductId, x.OptionKey), out int quantity) &&
@@ -168,6 +170,7 @@ internal static class MegaCoffeeSiteCart
                 }
                 finally { clearPage.Response -= CaptureClearResponse; }
             }
+            var verified = new List<SiteCartTarget>();
             foreach (var target in attempt.Targets)
             {
                 stage = "PRODUCT_REOPEN";
@@ -186,32 +189,70 @@ internal static class MegaCoffeeSiteCart
                 await quantity.PressAsync("Tab");
                 if (await quantity.InputValueAsync() != target.Quantity.ToString(CultureInfo.InvariantCulture))
                     return new("FAILED", "QUANTITY_LIMIT_OR_CONTROL_CHANGED");
-                mutationStarted = true;
-                stage = "CART_ADD_CLICK";
-                try { await page.Locator("#cartBtn").ClickAsync(new() { Timeout = 10000 }); }
-                catch (PlaywrightException)
+                var addFrameResponse = new TaskCompletionSource<IResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+                void CaptureAddResponse(object? _, IResponse reply)
                 {
-                    // Read the site cart below to resolve a navigation/response race. No re-add.
+                    if (Uri.TryCreate(reply.Url, UriKind.Absolute, out var uri) &&
+                        uri.Host == CartUrl.Host && uri.AbsolutePath == "/order/cart_ps.php")
+                        addFrameResponse.TrySetResult(reply);
                 }
-                stage = "CART_ADD_READ";
-                var addRead = await ReadAfterMutationAsync(page, login);
-                page = addRead.Page;
-                dialogs.Attach(page);
-                var current = addRead.Items;
-                if (dialogs.HasUnexpected) return new("UNKNOWN", "UNEXPECTED_DIALOG_AFTER_ADD", current);
-                if (!current.Any(x => x.ExternalProductId == target.ExternalProductId &&
-                    x.OptionKey == target.OptionKey && x.Quantity == target.Quantity))
-                    return new("FAILED", "SITE_CART_ITEM_MISMATCH");
+                var addPage = page;
+                addPage.Response += CaptureAddResponse;
+                try
+                {
+                    mutationStarted = true;
+                    stage = "CART_ADD_CLICK";
+                    try { await page.Locator("#cartBtn").ClickAsync(new() { Timeout = 10000 }); }
+                    catch (PlaywrightException) { /* Read the site; never click Add twice. */ }
+                    try
+                    {
+                        var reply = await addFrameResponse.Task.WaitAsync(TimeSpan.FromSeconds(8));
+                        await reply.FinishedAsync();
+                    }
+                    catch (Exception ex) when (ex is PlaywrightException or TimeoutException)
+                    { /* A confirmed cart read, rather than a missing response event, decides the result. */ }
+                    stage = "CART_ADD_READ";
+                    verified.Add(target);
+                    var observation = await ReadUntilMatchedAsync(page, login, verified, TimeSpan.FromSeconds(12));
+                    page = observation.Page;
+                    dialogs.Attach(page);
+                    if (dialogs.HasUnexpected)
+                        return new("UNKNOWN", "UNEXPECTED_DIALOG_AFTER_ADD", observation.Items,
+                            $"ITEMS_{verified.Count}_VERIFIED");
+                    if (!observation.Matched)
+                        return new("UNKNOWN", "SITE_CART_ITEM_MISMATCH", observation.Items,
+                            $"ITEMS_{verified.Count - 1}_VERIFIED");
+                }
+                finally { addPage.Response -= CaptureAddResponse; }
             }
             stage = "FINAL_CART_READ";
             if (dialogs.HasUnexpected) return new("UNKNOWN", "UNEXPECTED_DIALOG_BEFORE_FINAL_READ");
-            return Matches(await ReadAsync(page, login), attempt.Targets)
-                ? new("READY", "VERIFIED") : new("FAILED", "SITE_CART_MISMATCH");
+            var final = await ReadAfterMutationAsync(page, login);
+            return Matches(final.Items, attempt.Targets)
+                ? new("READY", "VERIFIED", final.Items, "FINAL_CART_VERIFIED")
+                : new("UNKNOWN", "SITE_CART_MISMATCH", final.Items, "ALL_ITEMS_ADDED");
         }
         catch (MegaCoffeeLoginRequiredException)
         { return new(mutationStarted ? "UNKNOWN" : "FAILED", "LOGIN_REQUIRED_" + stage); }
         catch (Exception ex) when (ex is PlaywrightException or InvalidDataException or TimeoutException)
         { return new(mutationStarted ? "UNKNOWN" : "FAILED", stage + "_" + ex.GetType().Name); }
+    }
+
+    internal static async Task<(IPage Page, IReadOnlyList<SiteCartEntry> Items, bool Matched)> ReadUntilMatchedAsync(
+        IPage page, MegaCoffeeLoginProbe login, IReadOnlyList<SiteCartTarget> expected, TimeSpan timeout)
+    {
+        var until = DateTimeOffset.UtcNow + timeout;
+        IReadOnlyList<SiteCartEntry> observed = [];
+        while (true)
+        {
+            var read = await ReadAfterMutationAsync(page, login);
+            page = read.Page;
+            observed = read.Items;
+            if (Matches(observed, expected)) return (page, observed, true);
+            if (DateTimeOffset.UtcNow >= until) return (page, observed, false);
+            // Only the read is retried; a delay never proves that a site write succeeded.
+            await Task.Delay(250);
+        }
     }
 
     private static async Task<(IPage Page, IReadOnlyList<SiteCartEntry> Items)> ReadAfterMutationAsync(

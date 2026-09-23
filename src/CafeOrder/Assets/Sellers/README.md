@@ -8,7 +8,7 @@
 | piece.png | 파미유 / PieceCake | www.piececake.co.kr_32x32.png |
 | food.png | 푸드레인 | oodrain.com_32x32.png |
 | wym.png | 우양 | www.wym.co.kr_32x32.png |
-| nuldam.png | 늘담 | nuldampartners.com_32x32.png |
+| nuldam.png | 널담 | nuldampartners.com_32x32.png |
 | coupang.png | 쿠팡 | www.coupang.com_32x32.png |
 | naver.png | 네이버 스마트스토어 | www.naver.com_32x32.png |
 

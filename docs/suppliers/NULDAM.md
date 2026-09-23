@@ -1,4 +1,4 @@
-# Nuldam Partners / 늘담
+# Nuldam Partners / 널담
 
 - 유형: AUTO.
 - 무료배송 초기 설정값: 100,000원.

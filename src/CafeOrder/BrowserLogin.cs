@@ -340,5 +340,9 @@ internal sealed partial class SupplierSessionManager : IAsyncDisposable
         internal CancellationTokenSource? Cancel;
         internal Task? Running;
         internal IBrowserContext? Context;
+        internal IPlaywright? CheckoutDriver;
+        internal IBrowserContext? CheckoutContext;
+        internal IPage? CheckoutPage;
+        internal bool CheckoutNeedsCart;
     }
 }
