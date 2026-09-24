@@ -6,9 +6,15 @@ namespace CafeOrder;
 
 internal enum MegaProductLookupStatus { Success, InvalidUrl, LoginRequired, Failed }
 internal sealed record MegaCoffeeProductSnapshot(string Name, decimal Price, string DisplayPrice,
-    string ProductUrl, string ImageUrl, byte[] ImageBytes, bool Available);
+    string ProductUrl, string ImageUrl, byte[] ImageBytes, bool Available)
+{
+    internal string? ResolvedProductUrl { get; init; }
+}
 internal sealed record MegaProductLookupResult(MegaProductLookupStatus Status, MegaCoffeeProductSnapshot? Product = null,
-    string? Reason = null, string? ErrorType = null);
+    string? Reason = null, string? ErrorType = null)
+{
+    internal string? ResolvedProductUrl { get; init; }
+}
 internal sealed record MegaCoffeePageProduct(string Name, decimal Price, string DisplayPrice,
     string ProductUrl, Uri ImageUri, bool Available);
 

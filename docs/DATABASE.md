@@ -6,7 +6,7 @@ CafeOrder는 상품 데이터 수집 프로그램이 아니다. 사이트에 표
 
 ## 상품 정보의 기준 범위
 
-`ProductId`, `SupplierId`, `ProductName`, `Price`, `PriceText`, `ProductUrl`, `ImageUrl`, `ImageCachePath`, `Category`, `AvailabilityStatus`, `LastCheckedAt`, `LastSuccessfulCheckAt`, `IsActive` 및 실제 주문 식별에 필요한 최소 외부 상품 ID.
+`ProductId`, `SupplierId`, `ProductName`, `Price`, `PriceText`, `ProductUrl`, `ResolvedProductUrl`, `ImageUrl`, `ImageCachePath`, `Category`, `AvailabilityStatus`, `LastCheckedAt`, `LastSuccessfulCheckAt`, `IsActive` 및 실제 주문 식별에 필요한 최소 외부 상품 ID.
 
 상품별 마지막 성공 조회 시각 `LastSuccessfulCheckAtUtc`는 SQLite에 UTC로 저장한다. 실패한 조회는 이 값을 바꾸지 않는다. 외부 상품 ID는 사이트 장바구니 대상 스냅샷에 저장한다. 브랜드, 맛, 중량, 용량, 지름, 재질, 상품종류 등은 별도 열로 나누지 않는다.
 
@@ -23,6 +23,7 @@ DB는 `%LOCALAPPDATA%\CafeOrder\Data\CafeOrder.db`에 둔다. `SchemaMigrations`
 - 장바구니는 SQLite에 즉시 저장되는 로컬 작업목록이다. 중요한 쓰기는 직렬화하고 트랜잭션은 짧게 유지한다.
 - 주문 스냅샷/체크포인트 및 완료 기록은 [ORDER_FLOW](ORDER_FLOW.md)의 안전 순서를 따른다.
 - 스키마 3은 `Products.LastSuccessfulCheckAtUtc`, `SiteCartAttempts`, `SiteCartAttemptItems`를 추가한다. 원격 장바구니를 바꾸기 전에 판매처·ProductId·외부 상품 ID·URL·옵션·수량·가격을 한 트랜잭션으로 저장한다. 준비/대기/검증/실패/불명 상태도 DB에 남기며 사이트 장바구니 준비를 주문 완료로 기록하지 않는다.
+- 스키마 4는 쿠팡 단축 링크의 원본 `ProductUrl`을 유지하면서 확인된 이동 상품 주소를 `ResolvedProductUrl`에 별도로 보관한다. 변경 전 DB를 백업한다.
 - 자동 백업 장기 방향: 하루 1회, 프로그램 업데이트 전. 현재 구현: DB schema migration 전과 기존 데이터 import 전.
 - 로그인 자격정보와 브라우저 세션은 일반 데이터 백업/내보내기에 그대로 포함하지 않는다.
 
@@ -46,7 +47,7 @@ ID/PW가 필요하면 Windows 보안 저장소를 사용한다. SQLite/settings.
 
 가져오기는 전체 행의 값·판매처·카테고리·URL·ID 중복/존재 여부를 먼저 검증한다. 빈 ID는 새 ID를 발급하고 기존 ID는 그대로 수정한다. 파일에 없는 상품은 삭제하지 않는다. 사용자 확인 후 `Data/backups`에 SQLite 백업을 만들고 모든 변경을 한 트랜잭션으로 반영한다. 실패 시 전체 롤백하며, 기존 상품의 수동 이미지 경로와 XLSX에 없는 내부 값은 유지한다. XLSX는 실행 DB가 아니다.
 
-필수 칸이 비고 `ProductUrl`이 있는 행은 지원되는 MegaCoffee·PieceCake·Nuldam 상품 URL만 조회한다. 검증된 상품명·가격·이미지·품절 상태를 사용하고, 카테고리는 분명한 명칭만 자동 분류하며 모호하면 `기타`로 둔다. 모든 칸이 채워진 일반 행은 기존 방식대로 웹 조회 없이 처리한다. 중복은 판매처와 실제 상품 코드(`goodsNo`/`prodNo`/`product_no`)로 조회 전에 판별한다. DB의 다른 ProductId 또는 파일 앞 유효 행과 같은 상품이면 건너뛰며 기존 소유 ID를 결과·로그에 표시한다. 같은 ProductId/상품 URL의 실제 정보 변경은 수정하고 변경이 없으면 건너뛴다. 기존 ProductId 행에 다른 신규 상품 URL을 넣으면 기존 상품을 보존하고 조회 후 새 ID로 등록한다. 기존 상품 수정의 수동 이미지는 보존한다. 조회 이미지는 확인 전 임시 저장 후 취소/오류 시 정리하며, 확인 후 백업과 단일 트랜잭션으로 반영한다. 지원하지 않는 조회 URL·실제 오류가 있으면 DB를 바꾸지 않는다.
+필수 칸이 비고 `ProductUrl`이 있는 행은 지원되는 MegaCoffee·PieceCake·Nuldam·쿠팡·네이버 상품 URL을 조회한다. 검증된 상품명·화면 표시 가격·이미지·품절 상태를 사용하고, 카테고리는 분명한 명칭만 자동 분류하며 모호하면 `기타`로 둔다. 쿠팡·네이버는 접근 제한·불확실한 가격·이미지 실패 시 행별 오류로 중단하고 더미 상품을 만들지 않는다. 모든 칸이 채워진 일반 행은 기존 방식대로 웹 조회 없이 처리한다. 중복은 판매처와 실제 상품 코드(`goodsNo`/`prodNo`/`product_no`), 쿠팡 `vendorItemId`, 네이버 스토어명+상품 ID로 조회 전에 판별한다. DB의 다른 ProductId 또는 파일 앞 유효 행과 같은 상품이면 건너뛰며 기존 소유 ID를 결과·로그에 표시한다. 같은 ProductId/상품 URL의 실제 정보 변경은 수정하고 변경이 없으면 건너뛴다. 기존 ProductId 행에 다른 신규 상품 URL을 넣으면 기존 상품을 보존하고 조회 후 새 ID로 등록한다. 기존 상품 수정의 수동 이미지는 보존한다. 조회 이미지는 확인 전 임시 저장 후 취소/오류 시 정리하며, 확인 후 백업과 단일 트랜잭션으로 반영한다. 지원하지 않는 조회 URL·실제 오류가 있으면 DB를 바꾸지 않는다.
 
 실제 MegaCoffee·PieceCake·Nuldam URL 상품을 카드에서 담으면 로컬 행을 먼저 저장·표시한다. 마지막 성공 조회가 없거나 24시간 이상 지났으면 로그인 세션으로 해당 상품만 비동기 재조회한다. URL 등록·XLSX 조회·장바구니 재조회 성공도 시각을 갱신한다. 조회 중 같은 카드 재클릭은 조회를 중복 실행하지 않으며 장바구니 +/-는 언제나 웹을 호출하지 않는다. 조회 성공 시 상품명·가격·표시가격·저장 웹 이미지·품절 상태를 SQLite와 상품/장바구니 화면에 반영하되 수동 이미지를 우선한다. 조회 실패 또는 담은 행 제거 시 기존 저장값·수량·성공 시각을 유지하며 제거된 행을 되살리지 않는다. 조회 중·실패 또는 품절 상품이 포함되면 장바구니의 주문 버튼은 비활성화한다. 상품 탭 새로고침은 계속 로컬 필터·정렬만 수행한다.
 

@@ -7,6 +7,7 @@ public sealed class ProductsView : UserControl
     internal Func<string, Task<MegaProductLookupResult>>? MegaLookup;
     internal Func<string, Task<MegaProductLookupResult>>? PieceLookup;
     internal Func<string, Task<MegaProductLookupResult>>? NuldamLookup;
+    internal Func<string, Task<MegaProductLookupResult>> ManualStoreLookup = ManualStoreProductLookup.LookupAsync;
     private readonly ProductGrid products = new();
     private readonly FlowLayoutPanel cart = Ui.List("CartList");
     private readonly TextBox search = new() { Name = "Search", Dock = DockStyle.Fill, PlaceholderText = "상품명 검색", Margin = new Padding(4, 6, 8, 6) };
@@ -128,7 +129,7 @@ public sealed class ProductsView : UserControl
     public void ApplyColumns() { products.Columns = data.Store.Preferences.Columns; foreach (var button in columnButtons) button.Selected = button.Columns == products.Columns; products.PerformLayout(); }
     private void AddDraft()
     {
-        var draft = new ProductCard(null, data, category.SelectedIndex > 0 ? category.Text : "기타", MegaLookup, PieceLookup, NuldamLookup);
+        var draft = new ProductCard(null, data, category.SelectedIndex > 0 ? category.Text : "기타", MegaLookup, PieceLookup, NuldamLookup, ManualStoreLookup);
         draft.Registered += () => { drafts.Remove(draft); productCards[draft.Product!.Id] = draft; UpdateCount(); };
         draft.DeleteDraft += () => { drafts.Remove(draft); products.RemoveItem(draft); draft.Dispose(); };
         drafts.Insert(0, draft); products.Controls.Add(draft); products.Prepend(draft); products.AutoScrollPosition = Point.Empty;
@@ -160,7 +161,7 @@ public sealed class ProductsView : UserControl
         {
             var lookup = MegaLookup ?? (_ => Task.FromResult(new MegaProductLookupResult(MegaProductLookupStatus.Failed)));
             using var plan = await data.PrepareImportAsync(path, lookup,
-                new Progress<string>(progress.SetStatus), cancellation.Token, PieceLookup, NuldamLookup);
+                new Progress<string>(progress.SetStatus), cancellation.Token, PieceLookup, NuldamLookup, ManualStoreLookup);
             if (IsDisposed || cancellation.IsCancellationRequested) return;
             if (plan.Issues.Count != 0)
             {

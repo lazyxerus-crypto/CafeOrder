@@ -8,6 +8,7 @@ public sealed class ProductCard : Panel
     private readonly Func<string, Task<MegaProductLookupResult>>? megaLookup;
     private readonly Func<string, Task<MegaProductLookupResult>>? pieceLookup;
     private readonly Func<string, Task<MegaProductLookupResult>>? nuldamLookup;
+    private readonly Func<string, Task<MegaProductLookupResult>>? manualStoreLookup;
     private string draftCategory;
     internal event Action? Registered;
     internal event Action? DeleteDraft;
@@ -23,6 +24,7 @@ public sealed class ProductCard : Panel
     private readonly System.Windows.Forms.Timer hover = new() { Interval = 450 };
     private Point hoverPoint;
     private bool checking;
+    private bool manualBusy;
     private ContextMenuStrip? menu;
     public bool IsDraft => Product == null;
     internal Rectangle ImageBounds { get; private set; }
@@ -66,9 +68,16 @@ public sealed class ProductCard : Panel
         Func<string, Task<MegaProductLookupResult>>? megaLookup,
         Func<string, Task<MegaProductLookupResult>>? pieceLookup,
         Func<string, Task<MegaProductLookupResult>>? nuldamLookup)
+        : this(product, data, draftCategory, megaLookup, pieceLookup, nuldamLookup, null) { }
+
+    internal ProductCard(Product? product, SampleData data, string draftCategory,
+        Func<string, Task<MegaProductLookupResult>>? megaLookup,
+        Func<string, Task<MegaProductLookupResult>>? pieceLookup,
+        Func<string, Task<MegaProductLookupResult>>? nuldamLookup,
+        Func<string, Task<MegaProductLookupResult>>? manualStoreLookup)
     {
         this.data = data; this.megaLookup = megaLookup; this.pieceLookup = pieceLookup;
-        this.nuldamLookup = nuldamLookup;
+        this.nuldamLookup = nuldamLookup; this.manualStoreLookup = manualStoreLookup;
         Product = product; this.draftCategory = draftCategory;
         Name = product == null ? "Draft_" + Guid.NewGuid().ToString("N") : $"Product_{product.Id}";
         DoubleBuffered = true; ResizeRedraw = true; BackColor = Color.White; AllowDrop = true; Margin = Padding.Empty; TabStop = true;
@@ -106,6 +115,7 @@ public sealed class ProductCard : Panel
         if (MegaCoffeeProductLookup.IsMegaHost(url.Text)) { _ = RegisterMegaDraftAsync(); return; }
         if (PieceCakeProductLookup.IsPieceHost(url.Text)) { _ = RegisterSiteDraftAsync("piece"); return; }
         if (NuldamProductLookup.IsNuldamHost(url.Text)) { _ = RegisterSiteDraftAsync("nuldam"); return; }
+        if (ManualStoreProductLookup.IsManualHost(url.Text)) { _ = EditManualStoreAsync(); return; }
         void Register()
         {
             Product = data.RegisterMock(url.Text, draftCategory); Name = $"Product_{Product.Id}";
@@ -114,6 +124,77 @@ public sealed class ProductCard : Panel
         Run(() => { if (Parent is ProductGrid grid) grid.UpdateInPlace(Register); else Register(); });
     }
     internal Task RegisterMegaDraftAsync() => RegisterSiteDraftAsync("mega");
+
+    private async Task EditManualStoreAsync()
+    {
+        if (IsDisposed || manualBusy || url is { Enabled: false }) return;
+        string originalUrl = Product?.Url ?? url?.Text.Trim() ?? "";
+        if (!ManualStoreProductLookup.TryProductUrl(originalUrl, out var supplierId, out _))
+        { feedback = "쿠팡·네이버 상품 URL 형식을 확인해주세요"; Invalidate(); return; }
+        if (Product == null && data.FindManualStoreProduct(originalUrl) is { } duplicate)
+        { feedback = ProductUrlIdentity.CoupangProductConflict(duplicate.Url, duplicate.ResolvedProductUrl, originalUrl)
+                ? "쿠팡 상품 ID 충돌 · 링크 확인" : $"이미 등록된 상품 · ProductId {duplicate.Id}";
+            Invalidate(); return; }
+        manualBusy = true;
+        if (url != null) url.Enabled = false;
+        feedback = "실제 상품 조회 중"; Invalidate();
+        string? webImage = null, manualImage = null;
+        try
+        {
+            var result = await (manualStoreLookup ?? ManualStoreProductLookup.LookupAsync)(originalUrl);
+            if (IsDisposed) return;
+            if (result.Status == MegaProductLookupStatus.Success && result.Product != null)
+                data.Store.Log.Write(LogLevel.INFO, "PRODUCT_LOOKUP_SUCCESS", "쿠팡·네이버 실제 상품정보를 확인했습니다.",
+                    supplier: supplierId, productId: Product?.Id, result: "SUCCESS");
+            else
+                data.Store.Log.Write(LogLevel.WARN, "PRODUCT_LOOKUP_FAILED", result.Reason ?? "상품정보를 확인하지 못했습니다.",
+                    supplier: supplierId, productId: Product?.Id, result: "FAILED", reason: result.ErrorType ?? result.Status.ToString());
+            using var dialog = new ManualStoreProductDialog(supplierId == "coupang" ? "쿠팡" : "네이버 스마트스토어",
+                originalUrl, Product, result.Product, result.Reason);
+            if (dialog.ShowDialog(FindForm()) != DialogResult.OK || dialog.Input == null) { feedback = ""; return; }
+            var input = dialog.Input;
+            if (result.Product != null)
+            {
+                webImage = data.Store.NewWebImagePath();
+                await Task.Run(() => ManualImages.Save(result.Product.ImageBytes, webImage));
+            }
+            if (input.ImageFile != null)
+            {
+                manualImage = data.Store.NewManualImagePath(Product?.Id ?? 0);
+                await Task.Run(() => ManualImages.Save(input.ImageFile, manualImage));
+            }
+            if (IsDisposed) return;
+            void Save()
+            {
+                var previous = Product;
+                Product = data.SaveManualStoreProduct(originalUrl, previous?.Category ?? draftCategory, input,
+                    result.Product, webImage, manualImage, previous, result.ResolvedProductUrl);
+                webImage = manualImage = null;
+                if (previous == null)
+                {
+                    Name = $"Product_{Product.Id}";
+                    url?.ContextMenuStrip?.Dispose(); url?.Dispose(); url = null;
+                    LoadImages(); SyncState(); PerformLayout(); Registered?.Invoke();
+                }
+            }
+            if (Product == null && Parent is ProductGrid grid) grid.UpdateInPlace(Save); else Save();
+            feedback = "";
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            data.Store.Log.Write(LogLevel.ERROR, "PRODUCT_SAVE_FAILED", "쿠팡·네이버 상품정보 또는 이미지를 저장하지 못했습니다.",
+                supplier: supplierId, productId: Product?.Id, result: "FAILED", error: ex);
+            feedback = "상품 저장에 실패했습니다. 다시 시도해주세요";
+        }
+        finally
+        {
+            manualBusy = false;
+            foreach (var path in new[] { webImage, manualImage })
+                if (path != null) { try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+            if (!IsDisposed && url != null) url.Enabled = true;
+            if (!IsDisposed) Invalidate();
+        }
+    }
 
     private async Task RegisterSiteDraftAsync(string supplierId)
     {
@@ -275,6 +356,9 @@ public sealed class ProductCard : Panel
         var name = context.Items.Add("이름 복사", null, (_, _) => Copy(product!.Name)); name.Enabled = !string.IsNullOrEmpty(product?.Name);
         var price = context.Items.Add("가격 복사", null, (_, _) => Copy(product!.PriceText)); price.Enabled = !string.IsNullOrEmpty(product?.PriceText);
         var both = context.Items.Add("이름 + 가격 복사", null, (_, _) => Copy(product!.Name + Environment.NewLine + product.PriceText)); both.Enabled = name.Enabled && price.Enabled;
+        if (product != null && ManualStoreProductLookup.TryProductUrl(product.Url, out var manualSupplier, out _) &&
+            manualSupplier == product.Supplier.Id)
+            context.Items.Add("상품 정보 수정", null, (_, _) => _ = EditManualStoreAsync());
         return context;
     }
     private void Copy(string text) { try { Clipboard.SetText(text); } catch (System.Runtime.InteropServices.ExternalException) { feedback = "복사하지 못했습니다"; Invalidate(); } }

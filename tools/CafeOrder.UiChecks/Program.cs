@@ -20,6 +20,26 @@ internal static partial class Program
             try { MegaSiteCartManualChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
             catch (Exception ex) { Console.WriteLine("Manual cart window stopped: " + ex.GetType().Name); return 1; }
         }
+        if (args.Contains("--manual-store-live-check"))
+        {
+            try { CheckManualStoreLiveAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine("Manual store live lookup failed: " + ex.Message); return 1; }
+        }
+        if (args.Contains("--manual-store-check"))
+        {
+            try
+            {
+                Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                CheckManualStoreAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: manual store SQLite/XLSX checks"); return 0;
+            }
+            catch (Exception ex) { Console.WriteLine("Manual store check failed: " + ex); return 1; }
+        }
+        if (args.Contains("--database-check"))
+        {
+            try { CheckDatabase(); Console.WriteLine("PASS: SQLite migration and persistence checks"); return 0; }
+            catch (Exception ex) { Console.WriteLine("Database check failed: " + ex); return 1; }
+        }
         if (args.Contains("--piece-readonly"))
         {
             try { PieceReadOnlyChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
@@ -179,7 +199,7 @@ internal static partial class Program
             {
                 var current = new SampleData(new LocalState());
                 using var db = current.Store.Database.Connect();
-                Require(SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 2, "User DB migration version");
+                Require(SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 4, "User DB migration version");
                 using var integrity = db.CreateCommand(); integrity.CommandText = "PRAGMA integrity_check";
                 Require((string?)integrity.ExecuteScalar() == "ok", "User DB integrity");
                 long saved = SqlNumber(db, "SELECT COUNT(*) FROM Products");
@@ -187,6 +207,7 @@ internal static partial class Program
                 return 0;
             }
             CheckDatabase();
+            CheckManualStoreAsync().GetAwaiter().GetResult();
             CheckXlsx();
             CheckXlsxLookupAsync().GetAwaiter().GetResult();
             CheckPieceXlsxAsync().GetAwaiter().GetResult();

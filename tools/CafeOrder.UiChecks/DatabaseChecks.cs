@@ -21,7 +21,7 @@ internal static partial class Program
                 "Catalog, cart and site-cart snapshot tables");
             reader.Close();
             Require(SqlNumber(db, "SELECT COUNT(*) FROM Products") == 0 && SqlNumber(db, "SELECT COUNT(*) FROM CartItems") == 0 &&
-                SqlNumber(db, "SELECT COUNT(*) FROM Suppliers") == 7 && SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 3,
+                SqlNumber(db, "SELECT COUNT(*) FROM Suppliers") == 7 && SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 4,
                 "Fresh DB keeps untouched examples virtual and does not seed sample cart");
             using var integrity = db.CreateCommand(); integrity.CommandText = "PRAGMA integrity_check";
             Require((string?)integrity.ExecuteScalar() == "ok", "SQLite integrity check");
@@ -109,7 +109,7 @@ internal static partial class Program
         catch (InvalidDataException) { }
         File.WriteAllText(brokenJson, "[]");
         var recovered = new SampleData(new LocalState(brokenDirectory));
-        using (var db = recovered.Store.Database.Connect()) Require(SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 3, "Failed import retries safely");
+        using (var db = recovered.Store.Database.Connect()) Require(SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 4, "Failed import retries safely");
 
         string rollbackDirectory = CheckDirectory("rollback"); var rollback = new SampleData(new LocalState(rollbackDirectory));
         using (var db = rollback.Store.Database.Connect())
@@ -151,15 +151,16 @@ internal static partial class Program
         var upgraded = new SampleData(new LocalState(priorDirectory));
         Require(upgraded.Products.Single(p => p.Id == 25).LastSuccessfulCheckAtUtc == null &&
             upgraded.Cart.Single().Quantity == 2 &&
-            Directory.GetFiles(Path.Combine(priorDirectory, "Data", "backups"), "*before-schema-3*.db").Length == 1,
-            "Version 2 product/cart survive version 3 migration with backup and unknown lookup time");
+            Directory.GetFiles(Path.Combine(priorDirectory, "Data", "backups"), "*before-schema-3*.db").Length == 1 &&
+            Directory.GetFiles(Path.Combine(priorDirectory, "Data", "backups"), "*before-schema-4*.db").Length == 1,
+            "Version 2 product/cart survive schema migrations with backups and unknown lookup time");
         string futureDirectory = CheckDirectory("future"); string futurePath = Path.Combine(futureDirectory, "Data", "CafeOrder.db"); Directory.CreateDirectory(Path.GetDirectoryName(futurePath)!);
         using (var db = new SqliteConnection($"Data Source={futurePath}"))
-        { db.Open(); using var cmd = db.CreateCommand(); cmd.CommandText = "CREATE TABLE SchemaMigrations(Version INTEGER PRIMARY KEY, Name TEXT NOT NULL, AppliedAt TEXT NOT NULL); INSERT INTO SchemaMigrations VALUES(4,'future','2026-01-01')"; cmd.ExecuteNonQuery(); }
+        { db.Open(); using var cmd = db.CreateCommand(); cmd.CommandText = "CREATE TABLE SchemaMigrations(Version INTEGER PRIMARY KEY, Name TEXT NOT NULL, AppliedAt TEXT NOT NULL); INSERT INTO SchemaMigrations VALUES(5,'future','2026-01-01')"; cmd.ExecuteNonQuery(); }
         try { _ = new SampleData(new LocalState(futureDirectory)); throw new Exception("Future DB version silently changed"); }
         catch (InvalidDataException) { }
         using (var db = new SqliteConnection($"Data Source={futurePath}"))
-        { db.Open(); Require(SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 4, "Future DB version remains unchanged"); }
+        { db.Open(); Require(SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 5, "Future DB version remains unchanged"); }
         results.Add("SQLite: catalog/cart/order snapshot tables, legacy import, restart persistence, rollback, backup, x64 PASS");
     }
 }

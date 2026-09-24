@@ -12,6 +12,7 @@ public record Product(int Id, string Name, decimal Price, string PriceNote,
     public bool IsActive { get; set; } = true;
     // Non-routable sample URLs. Only an explicit product-link command invokes the default browser.
     public string Url { get; set; } = $"https://example.invalid/product/{Id}";
+    public string? ResolvedProductUrl { get; set; }
     public string? DisplayPrice { get; set; }
     public string? ImageUrl { get; set; }
     public string? ImageCachePath { get; set; }
@@ -202,7 +203,7 @@ public sealed partial class SampleData
     public Product RegisterMock(string url, string category)
     {
         if (MegaCoffeeProductLookup.IsMegaHost(url) || PieceCakeProductLookup.IsPieceHost(url) ||
-            NuldamProductLookup.IsNuldamHost(url))
+            NuldamProductLookup.IsNuldamHost(url) || ManualStoreProductLookup.IsManualHost(url))
             throw new ArgumentException("실제 상품은 로그인된 페이지 조회 후 등록해야 합니다.");
         var seller = DetectSupplier(url) ?? throw new ArgumentException("지원하지 않는 상품 링크입니다");
         var source = Products.First(p => p.Supplier.Id == seller.Id);
@@ -215,6 +216,64 @@ public sealed partial class SampleData
     }
     internal Product RegisterMegaProduct(MegaCoffeeProductSnapshot snapshot, string category, string imagePath)
         => RegisterLookupProduct(snapshot, "mega", category, imagePath);
+
+    internal Product? FindManualStoreProduct(string url, int? exceptId = null)
+    {
+        if (!ManualStoreProductLookup.TryProductUrl(url, out var supplierId, out var key)) return null;
+        return Products.FirstOrDefault(product => product.Id != exceptId && product.Supplier.Id == supplierId &&
+            string.Equals(ProductUrlIdentity.Key(supplierId, product.Url), key, StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal Product SaveManualStoreProduct(string originalUrl, string category, ManualStoreProductInput input,
+        MegaCoffeeProductSnapshot? lookup, string? webImagePath, string? manualImagePath, Product? existing = null,
+        string? resolvedProductUrl = null)
+    {
+        if (!ManualStoreProductLookup.TryProductUrl(originalUrl, out var supplierId, out _) ||
+            !Categories.Skip(1).Contains(category) || string.IsNullOrWhiteSpace(input.Name) || input.Price < 0)
+            throw new ArgumentException("상품 URL·이름·가격·분류를 확인해주세요.");
+        if (existing != null && (existing.Supplier.Id != supplierId || existing.Url != originalUrl))
+            throw new ArgumentException("수정 대상 상품 URL이 변경됐습니다.");
+        if (FindManualStoreProduct(originalUrl, existing?.Id) is { } duplicate)
+            throw new ArgumentException(ProductUrlIdentity.CoupangProductConflict(duplicate.Url, duplicate.ResolvedProductUrl, originalUrl)
+                ? $"vendorItemId가 같은데 상품 ID가 다릅니다 (ProductId {duplicate.Id})."
+                : $"이미 등록된 상품입니다 (ProductId {duplicate.Id}).");
+        if (webImagePath != null && !File.Exists(webImagePath) || manualImagePath != null && !File.Exists(manualImagePath))
+            throw new ArgumentException("상품 이미지 파일을 확인할 수 없습니다.");
+        var seller = Suppliers.Single(supplier => supplier.Id == supplierId);
+        string origin = lookup == null ? "USER_ENTERED" : "VERIFIED_PAGE";
+        string display = $"{input.Price:N0}원" +
+            (lookup != null && lookup.DisplayPrice.Contains("옵션 선택 전", StringComparison.Ordinal) ? " (옵션 선택 전 표시가)" : "");
+        Product proposed = existing == null
+            ? new Product(0, input.Name.Trim(), input.Price, "", seller, category, lookup?.Available ?? true, 0)
+              { Url = originalUrl, ResolvedProductUrl = resolvedProductUrl ?? lookup?.ResolvedProductUrl,
+                DisplayPrice = display, ImageUrl = lookup?.ImageUrl,
+                ImageCachePath = webImagePath, ManualImagePath = manualImagePath,
+                LastSuccessfulCheckAtUtc = lookup == null ? null : DateTimeOffset.UtcNow }
+            : existing with { Name = input.Name.Trim(), Price = input.Price, PriceNote = "", DisplayPrice = display,
+                Available = lookup?.Available ?? existing.Available,
+                ImageUrl = lookup?.ImageUrl ?? existing.ImageUrl,
+                ImageCachePath = webImagePath ?? existing.ImageCachePath,
+                ManualImagePath = manualImagePath ?? existing.ManualImagePath,
+                ResolvedProductUrl = resolvedProductUrl ?? lookup?.ResolvedProductUrl ?? existing.ResolvedProductUrl,
+                LastSuccessfulCheckAtUtc = lookup == null ? existing.LastSuccessfulCheckAtUtc : DateTimeOffset.UtcNow };
+        Product saved;
+        if (existing == null) { saved = Store.Database.InsertProduct(proposed); Products.Add(saved); }
+        else
+        {
+            Store.Database.SaveProduct(proposed);
+            existing.Name = proposed.Name; existing.Price = proposed.Price; existing.DisplayPrice = proposed.DisplayPrice;
+            existing.Available = proposed.Available;
+            existing.ImageUrl = proposed.ImageUrl; existing.ImageCachePath = proposed.ImageCachePath;
+            existing.ResolvedProductUrl = proposed.ResolvedProductUrl;
+            existing.ManualImagePath = proposed.ManualImagePath;
+            existing.LastSuccessfulCheckAtUtc = proposed.LastSuccessfulCheckAtUtc;
+            saved = existing; ProductChanged?.Invoke(existing); Notify();
+        }
+        Store.Log.Write(LogLevel.INFO, existing == null ? "PRODUCT_REGISTERED" : "PRODUCT_UPDATED",
+            lookup == null ? "사용자가 확인해 입력한 상품정보를 저장했습니다." : "실제 조회 결과를 확인해 상품정보를 저장했습니다.",
+            supplier: supplierId, productId: saved.Id, result: "SUCCESS", reason: origin);
+        return saved;
+    }
 
     internal Product RegisterLookupProduct(MegaCoffeeProductSnapshot snapshot, string supplierId,
         string category, string imagePath)
@@ -317,7 +376,10 @@ public sealed partial class SampleData
             existing.Supplier = product.Supplier; existing.Category = product.Category; existing.Url = product.Url;
             existing.IsActive = product.IsActive; existing.Available = product.Available;
             existing.ImageUrl = product.ImageUrl; existing.ImageCachePath = product.ImageCachePath;
-            existing.ManualImagePath = product.ManualImagePath; ProductChanged?.Invoke(existing);
+            existing.ResolvedProductUrl = product.ResolvedProductUrl;
+            existing.ManualImagePath = product.ManualImagePath;
+            existing.LastSuccessfulCheckAtUtc = product.LastSuccessfulCheckAtUtc;
+            ProductChanged?.Invoke(existing);
         }
         CatalogChanged?.Invoke();
         if (plan.Changes.Any(change => change.Existing != null && Cart.Any(line => line.Product.Id == change.Existing.Id))) Notify();
