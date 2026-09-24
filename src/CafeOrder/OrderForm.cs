@@ -139,7 +139,11 @@ public sealed class OrderForm : Form
         card.Total = Ui.Role(Ui.Text("", true), TypographyKey.OrderInfo);
         card.Action = Ui.Button("주문 시작", () => StartOne(card), true,
             $"OrderAction_{lines[0].Product.Id}");
-        card.Secondary = Ui.Button("사이트 열기", () => _ = OpenCartAsync(card),
+        card.Secondary = Ui.Button("새 주문 준비", () =>
+        {
+            if (card.State == "WAITING_FOR_USER") _ = RecheckAsync(card, false);
+            else if (CanStartNew(card) && !batch) _ = PrepareOneAsync(card);
+        },
             name: $"OrderSite_{lines[0].Product.Id}");
         foreach (var button in new[] { card.Action, card.Secondary })
         { button.AutoSize = false; button.AutoEllipsis = true;
@@ -178,15 +182,17 @@ public sealed class OrderForm : Form
                 row.RefreshQuantity();
             }
             if (structure) card.Items.ResumeLayout(true);
-            string total = card.Supplier.Manual ? "수량/옵션: 판매처에서 선택" :
-                $"합계 {data.Subtotal(card.Lines):N0}원";
+            string total = card.Supplier.Manual ? "수량/옵션·가격: 판매처에서 확인" :
+                data.HasUnknownPrice(card.Lines) ? "합계 금액 미확정" : $"합계 {data.Subtotal(card.Lines):N0}원";
             if (card.Total.Text != total) card.Total.Text = total;
         }
         UpdateActions();
     }
 
-    private bool Eligible(OrderCard card) => card.State == "PENDING" &&
-        (card.Supplier.Manual || sessions != null && Supported(card) && !card.BrowserOpened) &&
+    private bool Eligible(OrderCard card) => card.State == "PENDING" && CanStartNew(card);
+
+    private bool CanStartNew(OrderCard card) => !card.Opening && card.State != "PREPARING" &&
+        (card.Supplier.Manual || sessions != null && Supported(card)) &&
         data.Shortfall(card.Supplier, card.Lines) == 0 && card.Lines.All(data.CanStartLocalOrder) &&
         (card.Supplier.Manual || ValidTargets(card));
 
@@ -241,6 +247,7 @@ public sealed class OrderForm : Form
         foreach (var card in cards)
         {
             decimal shortage = data.Shortfall(card.Supplier, card.Lines);
+            bool unknownPrice = data.HasUnknownPrice(card.Lines);
             bool soldOut = card.Lines.Any(line => !line.Product.Available);
             bool checking = card.Lines.Any(line => data.IsMegaCartLookupPending(line.Product));
             bool failedLookup = card.Lines.Any(line => data.MegaCartLookupFailed(line.Product));
@@ -254,6 +261,7 @@ public sealed class OrderForm : Form
                 "FAILED" => "사이트 장바구니 준비 실패",
                 "UNKNOWN" => "사이트 장바구니 상태 확인 필요",
                 "NOT_CONFIGURED" => "사이트 장바구니 연동 전",
+                _ when unknownPrice => "가격 미입력 · 금액 확인 필요",
                 _ when soldOut => "품절 상품 포함", _ when checking => "가격 확인 중",
                 _ when failedLookup => "가격 확인 필요", _ => "주문 대기"
             };
@@ -277,23 +285,25 @@ public sealed class OrderForm : Form
                 _ when card.Supplier.Manual => "사이트에서 주문하기", _ => "주문 시작"
             };
             if (card.State == "PENDING")
-                card.Action.Text = soldOut ? "품절 상품 포함" : checking ? "가격 확인 중" :
+                card.Action.Text = unknownPrice && !card.Supplier.Manual ? "가격 미입력" :
+                    soldOut ? "품절 상품 포함" : checking ? "가격 확인 중" :
                     failedLookup ? "가격 확인 필요" : shortage > 0 ? $"{shortage:N0}원 부족" :
                     card.Reason == "INVALID_PRODUCT_URL" ? "상품 링크 확인 필요" : card.Action.Text;
             card.Action.BackColor = card.State == "FAILED" || shortage > 0 ? Ui.Danger : Ui.Accent;
             card.Action.Enabled = !card.Opening && (card.State switch
             {
                 "PENDING" => Eligible(card), "READY" => sessions != null && !card.Supplier.Manual,
-                "FAILED" => card.Supplier.Manual || sessions != null && Supported(card) &&
-                    (card.Attempt != null || !card.BrowserOpened),
+                "FAILED" => card.Supplier.Manual || sessions != null && Supported(card) && card.Attempt != null,
                 "UNKNOWN" => sessions != null && Supported(card) && card.Attempt != null,
                 "WAITING_FOR_USER" => card.Supplier.Manual || sessions != null && Supported(card),
                 _ => false
             });
-            card.Secondary.Visible = !card.Supplier.Manual && card.State is ("FAILED" or "UNKNOWN");
-            card.Secondary.Enabled = !card.Opening && sessions != null && Supported(card);
+            card.Secondary.Visible = !card.Supplier.Manual && card.State is ("FAILED" or "UNKNOWN" or "WAITING_FOR_USER");
+            card.Secondary.Text = card.State == "WAITING_FOR_USER" ? "사이트 확인" : "새 주문 준비";
+            card.Secondary.Enabled = card.State == "WAITING_FOR_USER" ?
+                !card.Opening && sessions != null && card.Attempt != null : CanStartNew(card);
         }
-        startAll.Enabled = !batch && cards.Any(Eligible);
+        startAll.Enabled = !batch && cards.Any(CanStartNew);
         bool nextAuto = cards.Any(card => !card.Supplier.Manual && card.State == "READY" &&
             !card.Opened && !card.Opening);
         bool nextManual = cards.Any(card => card.Supplier.Manual && !card.Opened && !card.Opening &&
@@ -302,7 +312,9 @@ public sealed class OrderForm : Form
         next.Enabled = nextAuto || nextManual;
         progress.Text = $"준비 중 {cards.Count(card => card.State == "PREPARING")}  ·  " +
             $"준비 완료 {cards.Count(card => card.State == "READY")}  ·  " +
-            $"확인 필요 {cards.Count(card => card.State is "FAILED" or "UNKNOWN" or "WAITING_FOR_USER")}";
+            $"사이트 확인 {cards.Count(card => !card.Supplier.Manual && card.State is "FAILED" or "UNKNOWN")}  ·  " +
+            $"로그인/사용자 확인 {cards.Count(card => !card.Supplier.Manual && card.State == "WAITING_FOR_USER")}  ·  " +
+            $"수동 주문 대기 {cards.Count(card => card.Supplier.Manual && card.State == "WAITING_FOR_USER")}";
     }
 
     private void Restore(OrderCard card)
@@ -374,7 +386,7 @@ public sealed class OrderForm : Form
     {
         if (card.Supplier.Manual) { OpenManual(card); return; }
         if (card.State == "READY") { _ = OpenCartAsync(card); return; }
-        if (card.State == "FAILED") { _ = RecheckAsync(card, true); return; }
+        if (card.State == "FAILED") { _ = RecheckAsync(card, false); return; }
         if (card.State == "UNKNOWN") { _ = RecheckAsync(card, false); return; }
         if (card.State == "WAITING_FOR_USER") { _ = OpenCartAsync(card); return; }
         if (Eligible(card) && !batch) _ = PrepareOneAsync(card);
@@ -404,6 +416,7 @@ public sealed class OrderForm : Form
     {
         var attempt = data.Store.Database.CreateSiteCartAttempt(card.Supplier.Id, BuildTargets(card));
         card.Attempt = attempt; card.State = "PREPARING"; card.Reason = "";
+        card.BrowserOpened = false; card.Opened = false;
         data.Lock(card.Lines);
         data.Store.Log.Write(LogLevel.INFO, "SITE_CART_SNAPSHOT_SAVED",
             "판매처 주문 대상과 수량을 SQLite에 저장했습니다.",
@@ -432,7 +445,7 @@ public sealed class OrderForm : Form
     {
         if (batch) return;
         batch = true;
-        var pending = cards.Where(Eligible).ToArray();
+        var pending = cards.Where(CanStartNew).ToArray();
         var saved = new List<(OrderCard Card, SiteCartAttempt Attempt)>();
         // Store every AUTO supplier snapshot before the first remote cart write.
         foreach (var card in pending.Where(card => !card.Supplier.Manual))
@@ -460,6 +473,7 @@ public sealed class OrderForm : Form
         activeSitePreparations++;
         try
         {
+            await sessions!.CloseCheckoutForNewOrderAsync(card.Supplier.Id);
             SiteCartPreparationResult result = card.Supplier.Id switch
             {
                 "mega" => await sessions!.PrepareMegaSiteCartAsync(attempt, data.Store.Database,
@@ -502,15 +516,10 @@ public sealed class OrderForm : Form
         card.Opening = true; UpdateActions();
         try
         {
-            if (card.BrowserOpened)
-            {
-                card.State = "UNKNOWN"; card.Reason = "BROWSER_OPENED";
-                data.Store.Database.SetSiteCartAttemptState(card.Attempt.AttemptId, "UNKNOWN", "BROWSER_OPENED");
-                return;
-            }
             var current = BuildTargets(card);
             if (!SameTargets(card.Supplier.Id, card.Attempt.Targets, current))
-            { card.State = "UNKNOWN"; card.Reason = "CART_CHANGED"; return; }
+            { card.State = "UNKNOWN"; card.Reason = "CART_CHANGED";
+                data.Store.Database.SetSiteCartAttemptState(card.Attempt.AttemptId, card.State, card.Reason); return; }
             var check = await sessions.VerifySiteCartAsync(card.Supplier.Id, current);
             if (closing || IsDisposed) return;
             if (check.State == "READY")
@@ -526,13 +535,7 @@ public sealed class OrderForm : Form
             }
             else if (check.Reason == "SITE_CART_MISMATCH")
             {
-                if (retryAfterCheck)
-                {
-                    card.Opening = false;
-                    await PrepareOneAsync(card);
-                    return;
-                }
-                card.State = "FAILED"; card.Reason = "RETRY_SAFE_AFTER_RECHECK";
+                card.State = "FAILED"; card.Reason = "SITE_CART_MISMATCH";
                 data.Store.Database.SetSiteCartAttemptState(card.Attempt.AttemptId, card.State, card.Reason);
             }
             else
@@ -557,18 +560,18 @@ public sealed class OrderForm : Form
         card.Opening = true; UpdateActions();
         try
         {
-            // Once a payment-capable browser is requested, no later retry may rebuild this cart.
-            if (card.Attempt != null)
-                data.Store.Database.MarkSiteCartBrowserOpened(card.Attempt.AttemptId);
-            card.BrowserOpened = true;
             var opened = await sessions.OpenSiteCartForUserAsync(card.Supplier.Id);
             if (closing || IsDisposed) return;
-            if (opened.State == "OPENED") card.Opened = true;
+            if (opened.State == "OPENED")
+            {
+                card.Opened = true; card.BrowserOpened = true;
+                if (card.Attempt != null) data.Store.Database.MarkSiteCartBrowserOpened(card.Attempt.AttemptId);
+            }
             else if (opened.State == "WAITING_FOR_USER")
             { card.State = "WAITING_FOR_USER"; card.Reason = opened.Reason; }
             else { card.State = "UNKNOWN"; card.Reason = opened.Reason; }
             if (card.Attempt != null && opened.State != "OPENED")
-                data.Store.Database.SetSiteCartAttemptState(card.Attempt.AttemptId, card.State, "BROWSER_OPENED");
+                data.Store.Database.SetSiteCartAttemptState(card.Attempt.AttemptId, card.State, card.Reason);
             data.Store.Log.Write(opened.State == "OPENED" ? LogLevel.INFO : LogLevel.WARN,
                 "SITE_CART_WINDOW", opened.State == "OPENED" ?
                     "판매처 장바구니를 Edge에서 열었습니다. 주문·결제는 실행하지 않았습니다." :
@@ -578,9 +581,9 @@ public sealed class OrderForm : Form
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             card.State = "UNKNOWN"; card.Reason = "BROWSER_OPEN_FAILED_" + ex.GetType().Name;
-            if (card.Attempt != null && card.BrowserOpened)
+            if (card.Attempt != null)
                 try { data.Store.Database.SetSiteCartAttemptState(card.Attempt.AttemptId,
-                    "UNKNOWN", "BROWSER_OPENED"); }
+                    "UNKNOWN", card.Reason); }
                 catch (Exception saveError) when (saveError is not OutOfMemoryException)
                 { data.Store.Log.Write(LogLevel.ERROR, "SITE_CART_STATE_SAVE_FAILED",
                     "브라우저 열기 실패 상태를 SQLite에 저장하지 못했습니다.",

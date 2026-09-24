@@ -18,8 +18,8 @@ internal sealed class CartProductRow : BufferedPanel
         this.data = data; compact = inOrder;
         Line = line; Name = $"CartRow_{line.Product.Id}"; BackColor = Color.White;
         image = SampleImages.Picture(line.Product.Category, $"CartImage_{line.Product.Id}");
-        title = Ui.Role(Ui.CopyText(line.Product.Name, $"CartName_{line.Product.Id}"), inOrder ? TypographyKey.OrderProductName : TypographyKey.CartProductName);
-        price = Ui.Role(Ui.CopyText($"{line.Product.Price:N0}원", $"CartPrice_{line.Product.Id}"), inOrder ? TypographyKey.OrderInfo : TypographyKey.CartPrice);
+        title = Ui.Role(Ui.CopyText(line.Product.DisplayName, $"CartName_{line.Product.Id}"), inOrder ? TypographyKey.OrderProductName : TypographyKey.CartProductName);
+        price = Ui.Role(Ui.CopyText(line.Product.PriceText, $"CartPrice_{line.Product.Id}"), inOrder ? TypographyKey.OrderInfo : TypographyKey.CartPrice);
         quantity = Ui.Role(new Label { Name = $"Quantity_{line.Product.Id}", TextAlign = ContentAlignment.MiddleCenter }, TypographyKey.General);
         remove = Ui.Button("X", () => data.Remove(line), name: $"Remove_{line.Product.Id}");
         remove.AutoSize = false; remove.MinimumSize = new Size(30, 30); remove.Padding = Padding.Empty;
@@ -45,9 +45,10 @@ internal sealed class CartProductRow : BufferedPanel
     public bool RefreshQuantity()
     {
         bool details = false;
-        if (title.Text != Line.Product.Name) { title.Text = Line.Product.Name; details = true; }
-        string currentPrice = $"{Line.Product.Price:N0}원";
-        if (Line.Product.Supplier.Id == "mega" && MegaCoffeeProductLookup.TryProductUrl(Line.Product.Url, out _, out _))
+        if (title.Text != Line.Product.DisplayName) { title.Text = Line.Product.DisplayName; details = true; }
+        string currentPrice = Line.Product.PriceText;
+        if (Line.Product.PriceKnown && Line.Product.Supplier.Id == "mega" &&
+            MegaCoffeeProductLookup.TryProductUrl(Line.Product.Url, out _, out _))
             currentPrice = data.IsMegaCartLookupPending(Line.Product) ? $"저장 가격 {currentPrice} · 확인 중" :
                 data.MegaCartLookupFailed(Line.Product) ? $"저장 가격 {currentPrice} · 확인 실패" : currentPrice;
         if (!Line.Product.Available) currentPrice += " · 품절";
@@ -155,12 +156,13 @@ internal sealed class SupplierCartCard : SoftPanel
         }
         if (!supplier.Manual)
         {
-            string text = $"소계 {data.Subtotal(lines):N0}원"; if (subtotal.Text != text) subtotal.Text = text;
+            string text = data.HasUnknownPrice(lines) ? "소계 금액 미확정" : $"소계 {data.Subtotal(lines):N0}원";
+            if (subtotal.Text != text) subtotal.Text = text;
             decimal shortage = data.Shortfall(supplier, lines);
             bool soldOut = lines.Any(line => !line.Product.Available);
             bool checking = lines.Any(line => data.IsMegaCartLookupPending(line.Product));
             bool failed = lines.Any(line => data.MegaCartLookupFailed(line.Product));
-            string action = soldOut ? "품절 상품 포함" : checking ? "가격 확인 중" :
+            string action = data.HasUnknownPrice(lines) ? "가격 미입력" : soldOut ? "품절 상품 포함" : checking ? "가격 확인 중" :
                 failed ? "가격 확인 필요" : shortage > 0 ? $"{shortage:N0}원 부족" : "주문하기";
             if (order.Text != action) { measureVersion++; order.Text = action; }
             order.BackColor = shortage > 0 ? Ui.Danger : Ui.Accent; order.ForeColor = Color.White;

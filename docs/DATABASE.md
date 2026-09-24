@@ -24,6 +24,7 @@ DB는 `%LOCALAPPDATA%\CafeOrder\Data\CafeOrder.db`에 둔다. `SchemaMigrations`
 - 주문 스냅샷/체크포인트 및 완료 기록은 [ORDER_FLOW](ORDER_FLOW.md)의 안전 순서를 따른다.
 - 스키마 3은 `Products.LastSuccessfulCheckAtUtc`, `SiteCartAttempts`, `SiteCartAttemptItems`를 추가한다. 원격 장바구니를 바꾸기 전에 판매처·ProductId·외부 상품 ID·URL·옵션·수량·가격을 한 트랜잭션으로 저장한다. 준비/대기/검증/실패/불명 상태도 DB에 남기며 사이트 장바구니 준비를 주문 완료로 기록하지 않는다.
 - 스키마 4는 쿠팡 단축 링크의 원본 `ProductUrl`을 유지하면서 확인된 이동 상품 주소를 `ResolvedProductUrl`에 별도로 보관한다. 변경 전 DB를 백업한다.
+- 스키마 5는 `Products.PriceKnown`을 추가한다. 쿠팡·네이버 직접입력에서는 정상 상품 URL만으로 이름·가격·사진이 빈 상품을 저장할 수 있다. `PriceKnown=false`와 실제 `0원`은 다르며, 금액 미입력 항목이 포함된 합계·무료배송 금액은 미확정으로 표시한다. 변경 전 DB를 백업한다.
 - 자동 백업 장기 방향: 하루 1회, 프로그램 업데이트 전. 현재 구현: DB schema migration 전과 기존 데이터 import 전.
 - 로그인 자격정보와 브라우저 세션은 일반 데이터 백업/내보내기에 그대로 포함하지 않는다.
 
@@ -44,6 +45,8 @@ ID/PW가 필요하면 Windows 보안 저장소를 사용한다. SQLite/settings.
 ## XLSX 상품 입출력
 
 상품 탭의 기존 버튼은 SQLite `Products`에 저장된 상품만 `ProductId`, `Supplier`, `Name`, `Price`, `DisplayPrice`, `Category`, `ProductUrl`, `IsActive` 순서로 내보낸다. 삭제 상품은 `IsActive=false`로 포함하고, 미저장 샘플·Draft·장바구니·수동 이미지/내부 경로는 제외한다. 라이브러리는 ClosedXML이다.
+
+직접입력한 쿠팡·네이버 상품의 미입력 이름·가격은 XLSX에서도 빈 셀로 보존한다. 판매처·분류·활성 상태가 있는 완성형 행은 조회를 강제하지 않으며, URL만 있는 행은 기존 상품조회 경로를 따른다. 빈 가격을 `0원`으로 확정하지 않는다.
 
 가져오기는 전체 행의 값·판매처·카테고리·URL·ID 중복/존재 여부를 먼저 검증한다. 빈 ID는 새 ID를 발급하고 기존 ID는 그대로 수정한다. 파일에 없는 상품은 삭제하지 않는다. 사용자 확인 후 `Data/backups`에 SQLite 백업을 만들고 모든 변경을 한 트랜잭션으로 반영한다. 실패 시 전체 롤백하며, 기존 상품의 수동 이미지 경로와 XLSX에 없는 내부 값은 유지한다. XLSX는 실행 DB가 아니다.
 

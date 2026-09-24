@@ -43,13 +43,24 @@ internal static partial class Program
             }
             data.Store.Database.MarkSiteCartBrowserOpened(attempt.AttemptId);
             data.ChangeQuantity(data.Cart.Single(), 1);
+            data.Shipping["mega"] = 0;
             using (var form = new OrderForm(data, data.Cart.ToArray()) { Sessions = sessions })
             {
                 form.Show(); Application.DoEvents();
                 Require(Find<Label>(form, "OrderStatus_1").Text.Contains("확인 필요", StringComparison.Ordinal) &&
                     !Find<Button>(form, "OrderAction_1").Enabled &&
-                    Find<Button>(form, "OrderSite_1").Enabled,
-                    "A browser-opened attempt blocks auto rebuild even if the local quantity changed");
+                    Find<Button>(form, "OrderSite_1").Enabled &&
+                    Find<Button>(form, "StartAllOrders").Enabled,
+                    $"Browser-opened state: status={Find<Label>(form, "OrderStatus_1").Text}, " +
+                    $"action={Find<Button>(form, "OrderAction_1").Text}/{Find<Button>(form, "OrderAction_1").Enabled}, " +
+                    $"new={Find<Button>(form, "OrderSite_1").Enabled}, all={Find<Button>(form, "StartAllOrders").Enabled}");
+                var card = ((IEnumerable)typeof(OrderForm).GetField("cards", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .GetValue(form)!).Cast<object>().Single();
+                var fresh = (SiteCartAttempt)typeof(OrderForm).GetMethod("Snapshot", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .Invoke(form, [card])!;
+                Require(fresh.AttemptId != attempt.AttemptId && fresh.Targets.Single().Quantity == 2 &&
+                    data.Store.Database.ReadLatestSiteCartAttempt("mega", fresh.Targets)?.Attempt.AttemptId == fresh.AttemptId,
+                    "Explicit new-order path can save a fresh SQLite snapshot without changing the site cart");
                 form.Close();
             }
             var sample = data.Products.Single(item => item.Id == 2);
@@ -159,12 +170,21 @@ internal static partial class Program
             try
             {
                 var opened = await manager.OpenSiteCartForUserAsync(supplier);
-                Require(opened.State == "OPENED", supplier + " dedicated Edge cart opens visibly: " + opened.Reason);
                 var context = (IBrowserContext)contextField.GetValue(slot)!;
-                var page = context.Pages.LastOrDefault(item => !item.IsClosed);
-                Require(page != null && new Uri(page.Url).AbsolutePath == path,
-                    supplier + " opens the verified cart URL in its dedicated profile");
-                Console.WriteLine("PASS: " + supplier + " headed Edge cart opened read-only at " + path);
+                var page = context.Pages.LastOrDefault(item => !item.IsClosed) ??
+                    throw new Exception(supplier + " dedicated Edge window did not remain visible");
+                if (opened.State == "WAITING_FOR_USER")
+                {
+                    Require(opened.Reason is "LOGIN_REQUIRED" or "LOGIN_UNVERIFIED",
+                        supplier + " does not falsely mark an unverified session as opened");
+                    Console.WriteLine("WAITING: " + supplier + " dedicated Edge requires user login; cart was not verified");
+                }
+                else
+                {
+                    Require(opened.State == "OPENED" && new Uri(page.Url).AbsolutePath == path,
+                        supplier + " opens the verified cart URL in its dedicated profile: " + opened.Reason);
+                    Console.WriteLine("PASS: " + supplier + " headed Edge cart opened read-only at " + path);
+                }
             }
             finally
             {
@@ -173,5 +193,35 @@ internal static partial class Program
                 if (driverField.GetValue(slot) is IPlaywright driver) driver.Dispose();
             }
         }
+    }
+
+    private static async Task CheckOrderReviewReadOnlyAsync()
+    {
+        await using var manager = new SupplierSessionManager();
+        var opened = await manager.OpenSiteCartForUserAsync("mega");
+        Require(opened.State == "OPENED", "MegaCoffee logged-in cart window is visible: " + opened.Reason);
+        var slots = (IDictionary)typeof(SupplierSessionManager).GetField("slots",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(manager)!;
+        object slot = slots["mega"]!;
+        var context = (IBrowserContext)slot.GetType().GetField("CheckoutContext",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(slot)!;
+        var page = context.Pages.Last(item => !item.IsClosed);
+        var actual = await MegaCoffeeSiteCart.ReadAsync(page, new MegaCoffeeLoginProbe());
+        SiteCartTarget[] targets = actual.Select((item, index) => new SiteCartTarget(index + 1,
+            item.ExternalProductId,
+            "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=" + item.ExternalProductId,
+            item.Name, item.Quantity, item.UnitPrice ?? 0, item.OptionKey)).ToArray();
+        var match = await manager.VerifySiteCartAsync("mega", targets);
+        Require(match.State == "READY" && match.LastVerifiedStage == "READ_ONLY_VERIFIED",
+            "An already-open Edge cart can be checked without a new site-cart write");
+        SiteCartTarget[] changed = targets.Length == 0
+            ? [new SiteCartTarget(1, "79359", "https://www.megacoffee.co.kr/goods/goods_view.php?goodsNo=79359", "", 1, 0)]
+            : targets.Select((item, index) => index == 0 ? item with { Quantity = item.Quantity + 1 } : item).ToArray();
+        var mismatch = await manager.VerifySiteCartAsync("mega", changed);
+        Require(mismatch.State == "UNKNOWN" && mismatch.Reason == "SITE_CART_MISMATCH",
+            "A changed target remains unconfirmed rather than being marked READY");
+        Require(MegaCoffeeSiteCart.Matches(await MegaCoffeeSiteCart.ReadAsync(page, new MegaCoffeeLoginProbe()), targets),
+            "Read-only site confirmation leaves the live cart unchanged");
+        Console.WriteLine($"PASS: open-window read-only site confirmation; rows={actual.Count}, matching=READY, mismatch=UNKNOWN, cart unchanged");
     }
 }

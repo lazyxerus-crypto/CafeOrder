@@ -19,9 +19,10 @@ internal static class ManualImages
         try { image.Write(pending, MagickFormat.WebP); File.Move(pending, destination, true); }
         finally { if (File.Exists(pending)) File.Delete(pending); }
     }
-    public static Image Load(string path)
+    public static Image Load(string path) => Load(File.ReadAllBytes(path));
+    public static Image Load(byte[] source)
     {
-        using var image = new MagickImage(File.ReadAllBytes(path));
+        using var image = new MagickImage(source);
         using var stream = new MemoryStream(image.ToByteArray(MagickFormat.Png));
         using var bitmap = Image.FromStream(stream); return new Bitmap(bitmap);
     }

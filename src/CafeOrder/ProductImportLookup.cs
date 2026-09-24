@@ -300,11 +300,12 @@ public sealed partial class SampleData
                 string category = existing != null && seller.Manual ? existing.Category : InferCategory(item.Name);
                 proposed = existing == null
                     ? new Product(0, item.Name, item.Price, "", seller, category, item.Available, 0)
-                        { DisplayPrice = item.DisplayPrice, Url = item.ProductUrl, ImageUrl = item.ImageUrl,
+                        { DisplayPrice = item.DisplayPrice, PriceKnown = true, Url = item.ProductUrl, ImageUrl = item.ImageUrl,
                             ResolvedProductUrl = item.ResolvedProductUrl,
                             ImageCachePath = resolvedRow.FinalPath, DataOrigin = "UserMock",
                             LastSuccessfulCheckAtUtc = resolvedRow.CheckedAtUtc }
                     : existing with { Name = item.Name, Price = item.Price, PriceNote = "", DisplayPrice = item.DisplayPrice,
+                        PriceKnown = true,
                         Supplier = seller, Category = category, Url = item.ProductUrl,
                         IsActive = seller.Manual ? existing.IsActive : true,
                         Available = item.Available, ImageUrl = item.ImageUrl, ImageCachePath = resolvedRow.FinalPath,
@@ -316,14 +317,16 @@ public sealed partial class SampleData
             {
                 var seller = Suppliers.Single(supplier => supplier.Name == row.Supplier ||
                     string.Equals(supplier.Id, row.Supplier, StringComparison.OrdinalIgnoreCase));
-                string? display = string.IsNullOrWhiteSpace(row.DisplayPrice) ? null : row.DisplayPrice;
+                string? display = !row.PriceKnown || string.IsNullOrWhiteSpace(row.DisplayPrice) ? null : row.DisplayPrice;
                 proposed = existing == null
                     ? new Product(0, row.Name, row.Price, "", seller, row.Category, true, 0)
-                        { DisplayPrice = display, Url = row.ProductUrl, IsActive = row.IsActive, DataOrigin = "UserMock" }
+                        { DisplayPrice = display, PriceKnown = row.PriceKnown, Url = row.ProductUrl,
+                            IsActive = row.IsActive, DataOrigin = "UserMock" }
                     : existing with { Name = row.Name, Price = row.Price, DisplayPrice = display, Supplier = seller,
-                        Category = row.Category, Url = row.ProductUrl, IsActive = row.IsActive };
+                        PriceKnown = row.PriceKnown, Category = row.Category, Url = row.ProductUrl, IsActive = row.IsActive };
             }
             if (existing != null && existing.Name == proposed.Name && existing.Price == proposed.Price &&
+                existing.PriceKnown == proposed.PriceKnown &&
                 existing.PriceText == proposed.PriceText && existing.Supplier.Id == proposed.Supplier.Id &&
                 existing.Category == proposed.Category && existing.IsActive == proposed.IsActive &&
                 existing.Available == proposed.Available && string.Equals(

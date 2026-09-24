@@ -60,7 +60,7 @@ internal sealed partial class CatalogDatabase
                 if (hasLedger == 0 && Number(db, null, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'") != 0)
                     throw new InvalidDataException("알 수 없는 기존 DB입니다. 덮어쓰지 않았습니다.");
                 long version = hasLedger == 0 ? 0 : Number(db, null, "SELECT COALESCE(MAX(Version),0) FROM SchemaMigrations");
-                if (version > 4) throw new InvalidDataException("더 최신 버전의 DB입니다. 현재 앱으로 변경하지 않습니다.");
+                if (version > 5) throw new InvalidDataException("더 최신 버전의 DB입니다. 현재 앱으로 변경하지 않습니다.");
                 if (version == 0)
                 {
                     if (existed) Backup(db, "before-schema-1");
@@ -150,6 +150,19 @@ internal sealed partial class CatalogDatabase
                     tx.Commit();
                     log.Write(LogLevel.INFO, "DB_MIGRATION_APPLIED", "수동 판매처의 원본·이동 상품 URL 구분을 추가했습니다.",
                         result: "APPLIED", reason: "SCHEMA_4");
+                    version = 4;
+                }
+                if (version == 4)
+                {
+                    Backup(db, "before-schema-5");
+                    using var tx = db.BeginTransaction();
+                    Execute(db, tx, """
+                        ALTER TABLE Products ADD COLUMN PriceKnown INTEGER NOT NULL DEFAULT 1 CHECK(PriceKnown IN (0,1));
+                        INSERT INTO SchemaMigrations VALUES(5,'optional-manual-product-price',strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+                        """);
+                    tx.Commit();
+                    log.Write(LogLevel.INFO, "DB_MIGRATION_APPLIED", "가격 미입력과 실제 0원을 구분했습니다.",
+                        result: "APPLIED", reason: "SCHEMA_5");
                 }
                 return 0;
             });
@@ -174,18 +187,19 @@ internal sealed partial class CatalogDatabase
     }
     private static void Save(SqliteConnection db, SqliteTransaction tx, Product p) => Execute(db, tx, """
         INSERT INTO Products(ProductId,SupplierId,Name,Price,PriceNote,PriceText,Category,ProductUrl,
-            ImageUrl,ImageCachePath,ManualImagePath,IsAvailable,IsActive,DataOrigin,LastSuccessfulCheckAtUtc,ResolvedProductUrl)
-        VALUES($id,$supplier,$name,$price,$note,$display,$category,$url,$image,$cache,$manual,$available,$active,$origin,$checked,$resolved)
+            ImageUrl,ImageCachePath,ManualImagePath,IsAvailable,IsActive,DataOrigin,LastSuccessfulCheckAtUtc,ResolvedProductUrl,PriceKnown)
+        VALUES($id,$supplier,$name,$price,$note,$display,$category,$url,$image,$cache,$manual,$available,$active,$origin,$checked,$resolved,$priceKnown)
         ON CONFLICT(ProductId) DO UPDATE SET SupplierId=excluded.SupplierId, Name=excluded.Name, Price=excluded.Price,
         PriceNote=excluded.PriceNote, PriceText=excluded.PriceText, Category=excluded.Category, ProductUrl=excluded.ProductUrl,
         ImageUrl=excluded.ImageUrl, ImageCachePath=excluded.ImageCachePath, ManualImagePath=excluded.ManualImagePath,
         IsAvailable=excluded.IsAvailable, IsActive=excluded.IsActive, DataOrigin=excluded.DataOrigin,
-        LastSuccessfulCheckAtUtc=excluded.LastSuccessfulCheckAtUtc, ResolvedProductUrl=excluded.ResolvedProductUrl
+        LastSuccessfulCheckAtUtc=excluded.LastSuccessfulCheckAtUtc, ResolvedProductUrl=excluded.ResolvedProductUrl,
+        PriceKnown=excluded.PriceKnown
         """, ("$id", p.Id), ("$supplier", p.Supplier.Id), ("$name", p.Name), ("$price", p.Price.ToString(CultureInfo.InvariantCulture)),
         ("$note", p.PriceNote), ("$display", p.PriceText), ("$category", p.Category), ("$url", p.Url), ("$image", p.ImageUrl),
         ("$cache", p.ImageCachePath), ("$manual", p.ManualImagePath), ("$available", p.Available), ("$active", p.IsActive), ("$origin", p.DataOrigin),
         ("$checked", p.LastSuccessfulCheckAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)),
-        ("$resolved", p.ResolvedProductUrl));
+        ("$resolved", p.ResolvedProductUrl), ("$priceKnown", p.PriceKnown));
     private static void SaveLegacy(SqliteConnection db, SqliteTransaction tx, Product p) => Execute(db, tx, """
         INSERT INTO Products(ProductId,SupplierId,Name,Price,PriceNote,PriceText,Category,ProductUrl,
             ImageUrl,ImageCachePath,ManualImagePath,IsAvailable,IsActive,DataOrigin)
@@ -249,7 +263,7 @@ internal sealed partial class CatalogDatabase
             { DisplayPrice = reader.GetString(5), Url = reader.GetString(7), ImageUrl = reader.IsDBNull(8) ? null : reader.GetString(8), ImageCachePath = reader.IsDBNull(9) ? null : reader.GetString(9),
                 ManualImagePath = reader.IsDBNull(10) ? null : reader.GetString(10), IsActive = reader.GetBoolean(12), DataOrigin = reader.GetString(13),
                 LastSuccessfulCheckAtUtc = reader.IsDBNull(14) ? null : DateTimeOffset.Parse(reader.GetString(14), CultureInfo.InvariantCulture),
-                ResolvedProductUrl = reader.IsDBNull(15) ? null : reader.GetString(15) });
+                ResolvedProductUrl = reader.IsDBNull(15) ? null : reader.GetString(15), PriceKnown = reader.GetBoolean(16) });
         }
         return result;
     });

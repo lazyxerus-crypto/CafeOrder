@@ -62,7 +62,8 @@ public sealed class LocalState
 
 // XLSX is an interchange format; SQLite remains the live store.
 public record ProductTransferRow(int? ProductId, string Supplier, string Name, decimal Price,
-    string DisplayPrice, string Category, string ProductUrl, bool IsActive, int SheetRow = 0, bool LookupRequested = false);
+    string DisplayPrice, string Category, string ProductUrl, bool IsActive, int SheetRow = 0,
+    bool LookupRequested = false, bool PriceKnown = true);
 public record ProductWorkbookIssue(int Row, string Column, string Reason)
 {
     public override string ToString() => $"{Row}행 · {Column}: {Reason}";

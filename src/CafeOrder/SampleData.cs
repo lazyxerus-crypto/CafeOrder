@@ -6,6 +6,7 @@ public record Product(int Id, string Name, decimal Price, string PriceNote,
 {
     public string Name { get; set; } = Name;
     public decimal Price { get; set; } = Price;
+    public bool PriceKnown { get; set; } = true;
     public Supplier Supplier { get; set; } = Supplier;
     public bool Available { get; set; } = Available;
     public string Category { get; set; } = Category;
@@ -19,7 +20,8 @@ public record Product(int Id, string Name, decimal Price, string PriceNote,
     public string? ManualImagePath { get; set; }
     public DateTimeOffset? LastSuccessfulCheckAtUtc { get; set; }
     public string DataOrigin { get; set; } = "Sample";
-    public string PriceText => DisplayPrice ?? $"{Price:N0}원{(PriceNote.Length == 0 ? "" : $" ({PriceNote})")}";
+    public string DisplayName => string.IsNullOrWhiteSpace(Name) ? "이름 미입력" : Name;
+    public string PriceText => !PriceKnown ? "가격 미입력" : DisplayPrice ?? $"{Price:N0}원{(PriceNote.Length == 0 ? "" : $" ({PriceNote})")}";
 }
 
 public sealed class CartLine(Product product, int quantity)
@@ -200,6 +202,63 @@ public sealed partial class SampleData
             supplier: product.Supplier.Id, productId: product.Id, result: "SUCCESS");
         ProductChanged?.Invoke(product); Notify();
     }
+    internal void ChangeName(Product product, string name)
+    {
+        if (name.Length > 500) throw new ArgumentException("상품명은 500자 이하여야 합니다.");
+        string previous = product.Name;
+        product.Name = name.Trim();
+        try { Store.Database.SaveProduct(product); } catch { product.Name = previous; throw; }
+        Store.Log.Write(LogLevel.INFO, "PRODUCT_UPDATED", "상품명을 저장했습니다.",
+            supplier: product.Supplier.Id, productId: product.Id, result: "SUCCESS", reason: "NAME_CHANGED");
+        ProductChanged?.Invoke(product); CatalogChanged?.Invoke(); Notify();
+    }
+    internal void ChangePrice(Product product, decimal? price)
+    {
+        if (price is < 0 or > 999_999_999) throw new ArgumentException("가격은 0 이상의 숫자여야 합니다.");
+        decimal previous = product.Price;
+        bool known = product.PriceKnown;
+        string? display = product.DisplayPrice;
+        product.Price = price ?? 0; product.PriceKnown = price != null;
+        product.DisplayPrice = price == null ? null : $"{price:N0}원";
+        try { Store.Database.SaveProduct(product); }
+        catch { product.Price = previous; product.PriceKnown = known; product.DisplayPrice = display; throw; }
+        Store.Log.Write(LogLevel.INFO, "PRODUCT_UPDATED", "상품 가격 상태를 저장했습니다.",
+            supplier: product.Supplier.Id, productId: product.Id, result: "SUCCESS", reason: "PRICE_CHANGED",
+            oldPrice: known ? previous : null, newPrice: price);
+        ProductChanged?.Invoke(product); Notify();
+    }
+    internal void ChangeUrl(Product product, string url)
+    {
+        url = url.Trim();
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") ||
+            uri.UserInfo.Length != 0 || uri.Fragment.Length != 0 || !uri.IsDefaultPort ||
+            DetectSupplier(url)?.Id != product.Supplier.Id)
+            throw new ArgumentException("상품 URL과 판매처를 확인해주세요.");
+        bool identifiable = product.Supplier.Id switch
+        {
+            "mega" => MegaCoffeeProductLookup.TryProductUrl(url, out _, out _),
+            "piece" => PieceCakeProductLookup.TryProductUrl(url, out _, out _),
+            "nuldam" => NuldamProductLookup.TryProductUrl(url, out _, out _),
+            "coupang" or "naver" => ManualStoreProductLookup.TryProductUrl(url, out var id, out _) &&
+                id == product.Supplier.Id,
+            _ => false
+        };
+        if (!identifiable) throw new ArgumentException("이 판매처의 식별 가능한 상품 URL이 필요합니다.");
+        string? key = ProductUrlIdentity.Key(product.Supplier.Id, url);
+        var duplicate = Products.FirstOrDefault(item => item.Id != product.Id && item.Supplier.Id == product.Supplier.Id &&
+            string.Equals(ProductUrlIdentity.Key(item.Supplier.Id, item.Url), key, StringComparison.OrdinalIgnoreCase));
+        if (duplicate != null) throw new ArgumentException($"이미 등록된 상품 URL입니다 (ProductId {duplicate.Id}).");
+        if (product.Url == url) return;
+        string priorUrl = product.Url; string? priorResolved = product.ResolvedProductUrl;
+        DateTimeOffset? priorChecked = product.LastSuccessfulCheckAtUtc;
+        product.Url = url; product.ResolvedProductUrl = null; product.LastSuccessfulCheckAtUtc = null;
+        try { Store.Database.SaveProduct(product); }
+        catch { product.Url = priorUrl; product.ResolvedProductUrl = priorResolved;
+            product.LastSuccessfulCheckAtUtc = priorChecked; throw; }
+        Store.Log.Write(LogLevel.INFO, "PRODUCT_UPDATED", "상품 URL을 저장하고 이전 조회 성공 시각을 초기화했습니다.",
+            supplier: product.Supplier.Id, productId: product.Id, result: "SUCCESS", reason: "URL_CHANGED");
+        ProductChanged?.Invoke(product); CatalogChanged?.Invoke(); Notify();
+    }
     public Product RegisterMock(string url, string category)
     {
         if (MegaCoffeeProductLookup.IsMegaHost(url) || PieceCakeProductLookup.IsPieceHost(url) ||
@@ -229,7 +288,7 @@ public sealed partial class SampleData
         string? resolvedProductUrl = null)
     {
         if (!ManualStoreProductLookup.TryProductUrl(originalUrl, out var supplierId, out _) ||
-            !Categories.Skip(1).Contains(category) || string.IsNullOrWhiteSpace(input.Name) || input.Price < 0)
+            !Categories.Skip(1).Contains(category) || input.Price is < 0 or > 999_999_999)
             throw new ArgumentException("상품 URL·이름·가격·분류를 확인해주세요.");
         if (existing != null && (existing.Supplier.Id != supplierId || existing.Url != originalUrl))
             throw new ArgumentException("수정 대상 상품 URL이 변경됐습니다.");
@@ -241,15 +300,16 @@ public sealed partial class SampleData
             throw new ArgumentException("상품 이미지 파일을 확인할 수 없습니다.");
         var seller = Suppliers.Single(supplier => supplier.Id == supplierId);
         string origin = lookup == null ? "USER_ENTERED" : "VERIFIED_PAGE";
-        string display = $"{input.Price:N0}원" +
+        string? display = input.Price == null ? null : $"{input.Price:N0}원" +
             (lookup != null && lookup.DisplayPrice.Contains("옵션 선택 전", StringComparison.Ordinal) ? " (옵션 선택 전 표시가)" : "");
         Product proposed = existing == null
-            ? new Product(0, input.Name.Trim(), input.Price, "", seller, category, lookup?.Available ?? true, 0)
+            ? new Product(0, input.Name.Trim(), input.Price ?? 0, "", seller, category, lookup?.Available ?? true, 0)
               { Url = originalUrl, ResolvedProductUrl = resolvedProductUrl ?? lookup?.ResolvedProductUrl,
-                DisplayPrice = display, ImageUrl = lookup?.ImageUrl,
+                DisplayPrice = display, PriceKnown = input.Price != null, ImageUrl = lookup?.ImageUrl,
                 ImageCachePath = webImagePath, ManualImagePath = manualImagePath,
                 LastSuccessfulCheckAtUtc = lookup == null ? null : DateTimeOffset.UtcNow }
-            : existing with { Name = input.Name.Trim(), Price = input.Price, PriceNote = "", DisplayPrice = display,
+            : existing with { Name = input.Name.Trim(), Price = input.Price ?? 0, PriceNote = "", DisplayPrice = display,
+                PriceKnown = input.Price != null,
                 Available = lookup?.Available ?? existing.Available,
                 ImageUrl = lookup?.ImageUrl ?? existing.ImageUrl,
                 ImageCachePath = webImagePath ?? existing.ImageCachePath,
@@ -262,6 +322,7 @@ public sealed partial class SampleData
         {
             Store.Database.SaveProduct(proposed);
             existing.Name = proposed.Name; existing.Price = proposed.Price; existing.DisplayPrice = proposed.DisplayPrice;
+            existing.PriceKnown = proposed.PriceKnown;
             existing.Available = proposed.Available;
             existing.ImageUrl = proposed.ImageUrl; existing.ImageCachePath = proposed.ImageCachePath;
             existing.ResolvedProductUrl = proposed.ResolvedProductUrl;
@@ -299,7 +360,8 @@ public sealed partial class SampleData
     }
     private IProductWorkbook Workbook() => new ClosedXmlProductWorkbook(Suppliers, Categories);
     public ProductTransferRow[] ExportRows() => Store.Database.ReadProducts(Suppliers)
-        .Select(p => new ProductTransferRow(p.Id, p.Supplier.Name, p.Name, p.Price, p.PriceText, p.Category, p.Url, p.IsActive)).ToArray();
+        .Select(p => new ProductTransferRow(p.Id, p.Supplier.Name, p.Name, p.Price,
+            p.PriceKnown ? p.PriceText : "", p.Category, p.Url, p.IsActive, PriceKnown: p.PriceKnown)).ToArray();
     internal int ExportWorkbook(string path)
     {
         try
@@ -372,7 +434,8 @@ public sealed partial class SampleData
         {
             var existing = plan.Changes[index].Existing; var product = written[index];
             if (existing == null) { Products.Add(product); continue; }
-            existing.Name = product.Name; existing.Price = product.Price; existing.DisplayPrice = product.DisplayPrice;
+            existing.Name = product.Name; existing.Price = product.Price; existing.PriceKnown = product.PriceKnown;
+            existing.DisplayPrice = product.DisplayPrice;
             existing.Supplier = product.Supplier; existing.Category = product.Category; existing.Url = product.Url;
             existing.IsActive = product.IsActive; existing.Available = product.Available;
             existing.ImageUrl = product.ImageUrl; existing.ImageCachePath = product.ImageCachePath;
@@ -385,9 +448,10 @@ public sealed partial class SampleData
         if (plan.Changes.Any(change => change.Existing != null && Cart.Any(line => line.Product.Id == change.Existing.Id))) Notify();
     }
 
-    public decimal Subtotal(IEnumerable<CartLine> lines) => lines.Sum(x => x.Product.Price * x.Quantity);
+    public decimal Subtotal(IEnumerable<CartLine> lines) => lines.Where(x => x.Product.PriceKnown).Sum(x => x.Product.Price * x.Quantity);
+    public bool HasUnknownPrice(IEnumerable<CartLine> lines) => lines.Any(x => !x.Product.PriceKnown);
     public decimal Shortfall(Supplier supplier, IEnumerable<CartLine> lines)
-        => supplier.Manual ? 0 : Math.Max(0, Shipping[supplier.Id] - Subtotal(lines));
+        => supplier.Manual || HasUnknownPrice(lines) ? 0 : Math.Max(0, Shipping[supplier.Id] - Subtotal(lines));
 
     public Supplier? DetectSupplier(string text)
     {

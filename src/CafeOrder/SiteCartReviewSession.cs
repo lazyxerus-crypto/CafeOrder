@@ -29,6 +29,30 @@ internal sealed partial class SupplierSessionManager
         }
     }
 
+    internal Task CloseCheckoutForNewOrderAsync(string supplierId)
+    {
+        lock (sync)
+        {
+            if (disposed) throw new ObjectDisposedException(nameof(SupplierSessionManager));
+            var slot = slots[supplierId];
+            var task = CloseCheckoutAfterAsync(slot.Running, slot);
+            slot.Running = task;
+            return task;
+        }
+    }
+
+    private static async Task CloseCheckoutAfterAsync(Task? prior, SessionSlot slot)
+    {
+        if (prior != null) await prior;
+        if (slot.CheckoutContext != null)
+        {
+            try { await slot.CheckoutContext.CloseAsync(); } catch (PlaywrightException) { }
+            slot.CheckoutDriver?.Dispose();
+            slot.CheckoutContext = null; slot.CheckoutDriver = null;
+            slot.CheckoutPage = null; slot.CheckoutNeedsCart = false;
+        }
+    }
+
     private async Task<SiteCartPreparationResult> VerifyAfterAsync(Task? prior, SessionSlot slot,
         string supplierId, IReadOnlyList<SiteCartTarget> targets)
     {
@@ -36,7 +60,16 @@ internal sealed partial class SupplierSessionManager
         {
             if (prior != null) await prior;
             if (slot.CheckoutContext != null)
-                return new("UNKNOWN", "BROWSER_OPENED");
+            {
+                IPage? page = null;
+                try { page = await slot.CheckoutContext.NewPageAsync(); }
+                catch (PlaywrightException) { await CloseCheckoutAfterAsync(null, slot); }
+                if (page != null)
+                {
+                    try { return await VerifyWithContextAsync(slot.CheckoutContext!, page, supplierId, targets); }
+                    finally { try { await page.CloseAsync(); } catch (PlaywrightException) { } }
+                }
+            }
             string profile = ProfilePath(supplierId);
             Directory.CreateDirectory(profile);
             using var playwright = await Playwright.CreateAsync();
@@ -45,38 +78,10 @@ internal sealed partial class SupplierSessionManager
             slot.Context = context;
             try
             {
-                var probe = probes[supplierId];
                 var vault = new BrowserCookieVault(profile, supplierId);
                 await vault.RestoreAsync(context);
                 var page = context.Pages.FirstOrDefault() ?? await context.NewPageAsync();
-                await page.GotoAsync(probe.HomeUrl, new()
-                { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 20000 });
-                var state = await probe.CheckAsync(page);
-                if (state != SupplierLoginState.LoggedIn)
-                {
-                    if (state == SupplierLoginState.LoginRequired) vault.Clear();
-                    Publish(supplierId, state);
-                    return new("WAITING_FOR_USER", state == SupplierLoginState.LoginRequired ?
-                        "LOGIN_REQUIRED" : "LOGIN_UNVERIFIED");
-                }
-                IReadOnlyList<SiteCartEntry> current = supplierId switch
-                {
-                    "mega" => await MegaCoffeeSiteCart.ReadAsync(page, new MegaCoffeeLoginProbe()),
-                    "piece" => await PieceCakeSiteCart.ReadAsync(page, new PieceCakeLoginProbe()),
-                    "nuldam" => await NuldamSiteCart.ReadAsync(page, new NuldamLoginProbe()),
-                    _ => throw new InvalidDataException("판매처 장바구니를 확인할 수 없습니다.")
-                };
-                await vault.SaveAsync(context, probe.HomeUrl);
-                Publish(supplierId, SupplierLoginState.LoggedIn);
-                bool matches = supplierId switch
-                {
-                    "mega" => MegaCoffeeSiteCart.Matches(current, targets),
-                    "piece" => PieceCakeSiteCart.Matches(current, targets),
-                    "nuldam" => NuldamSiteCart.Matches(current, targets),
-                    _ => false
-                };
-                return matches ? new("READY", "ALREADY_MATCHED", current, "READ_ONLY_VERIFIED") :
-                    new("UNKNOWN", "SITE_CART_MISMATCH", current, "READ_ONLY_VERIFIED");
+                return await VerifyWithContextAsync(context, page, supplierId, targets);
             }
             finally
             {
@@ -96,6 +101,41 @@ internal sealed partial class SupplierSessionManager
                 supplier: supplierId, result: "UNKNOWN", error: ex);
             return new("UNKNOWN", "READ_FAILED_" + ex.GetType().Name);
         }
+    }
+
+    private async Task<SiteCartPreparationResult> VerifyWithContextAsync(IBrowserContext context,
+        IPage page, string supplierId, IReadOnlyList<SiteCartTarget> targets)
+    {
+        var probe = probes[supplierId];
+        var vault = new BrowserCookieVault(ProfilePath(supplierId), supplierId);
+        await page.GotoAsync(probe.HomeUrl, new()
+            { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 20000 });
+        var state = await probe.CheckAsync(page);
+        if (state != SupplierLoginState.LoggedIn)
+        {
+            if (state == SupplierLoginState.LoginRequired) vault.Clear();
+            Publish(supplierId, state);
+            return new("WAITING_FOR_USER", state == SupplierLoginState.LoginRequired ?
+                "LOGIN_REQUIRED" : "LOGIN_UNVERIFIED");
+        }
+        IReadOnlyList<SiteCartEntry> current = supplierId switch
+        {
+            "mega" => await MegaCoffeeSiteCart.ReadAsync(page, new MegaCoffeeLoginProbe()),
+            "piece" => await PieceCakeSiteCart.ReadAsync(page, new PieceCakeLoginProbe()),
+            "nuldam" => await NuldamSiteCart.ReadAsync(page, new NuldamLoginProbe()),
+            _ => throw new InvalidDataException("판매처 장바구니를 확인할 수 없습니다.")
+        };
+        await vault.SaveAsync(context, probe.HomeUrl);
+        Publish(supplierId, SupplierLoginState.LoggedIn);
+        bool matches = supplierId switch
+        {
+            "mega" => MegaCoffeeSiteCart.Matches(current, targets),
+            "piece" => PieceCakeSiteCart.Matches(current, targets),
+            "nuldam" => NuldamSiteCart.Matches(current, targets),
+            _ => false
+        };
+        return matches ? new("READY", "ALREADY_MATCHED", current, "READ_ONLY_VERIFIED") :
+            new("UNKNOWN", "SITE_CART_MISMATCH", current, "READ_ONLY_VERIFIED");
     }
 
     internal Task<CheckoutOpenResult> OpenSiteCartForUserAsync(string supplierId)
@@ -125,12 +165,18 @@ internal sealed partial class SupplierSessionManager
                 if (slot.CheckoutNeedsCart)
                 {
                     var probe = probes[supplierId];
-                    if (await probe.CheckAsync(existing) != SupplierLoginState.LoggedIn)
+                    var loginState = await probe.CheckAsync(existing);
+                    if (loginState != SupplierLoginState.LoggedIn)
                     {
-                        new BrowserCookieVault(ProfilePath(supplierId), supplierId).Clear();
-                        Publish(supplierId, SupplierLoginState.LoginRequired);
+                        if (loginState == SupplierLoginState.LoginRequired)
+                            new BrowserCookieVault(ProfilePath(supplierId), supplierId).Clear();
+                        Publish(supplierId, loginState);
+                        if (loginState == SupplierLoginState.LoginRequired && existing.Url != probe.LoginUrl)
+                            await existing.GotoAsync(probe.LoginUrl, new()
+                                { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 20000 });
                         await existing.BringToFrontAsync();
-                        return new("WAITING_FOR_USER", "LOGIN_REQUIRED");
+                        return new("WAITING_FOR_USER", loginState == SupplierLoginState.LoginRequired ?
+                            "LOGIN_REQUIRED" : "LOGIN_UNVERIFIED");
                     }
                     var cartResponse = await existing.GotoAsync(CheckoutUrls[supplierId], new()
                     { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 20000 });
@@ -175,7 +221,12 @@ internal sealed partial class SupplierSessionManager
                 slot.CheckoutNeedsCart = true;
                 if (state == SupplierLoginState.LoginRequired) vault.Clear();
                 Publish(supplierId, state);
-                return new("WAITING_FOR_USER", "LOGIN_REQUIRED");
+                if (state == SupplierLoginState.LoginRequired && page.Url != login.LoginUrl)
+                    await page.GotoAsync(login.LoginUrl, new()
+                        { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 20000 });
+                await page.BringToFrontAsync();
+                return new("WAITING_FOR_USER", state == SupplierLoginState.LoginRequired ?
+                    "LOGIN_REQUIRED" : "LOGIN_UNVERIFIED");
             }
             if (response?.Status != 200 || new Uri(page.Url).AbsolutePath != new Uri(CheckoutUrls[supplierId]).AbsolutePath)
                 return new("UNKNOWN", "CART_PAGE_UNAVAILABLE");

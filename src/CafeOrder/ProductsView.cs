@@ -18,6 +18,7 @@ public sealed class ProductsView : UserControl
     private CartProductRow? highlighted;
     private readonly List<ProductCard> drafts = [];
     private readonly Dictionary<int, ProductCard> productCards = [];
+    private readonly HashSet<int> persistedSearchIds = [];
     private readonly Dictionary<string, SupplierCartCard> supplierCards = [];
     private readonly Label emptyCart = Ui.Text("장바구니가 비었습니다.");
     private readonly Button orderAll;
@@ -104,6 +105,7 @@ public sealed class ProductsView : UserControl
         right.Controls.Add(cart); right.Controls.Add(Ui.SectionHeading("장바구니")); right.Controls.Add(orderAll);
         root.Controls.Add(filters, 0, 0); root.Controls.Add(management, 1, 0);
         root.Controls.Add(left, 0, 1); root.Controls.Add(right, 1, 1); Controls.Add(root);
+        persistedSearchIds.UnionWith(data.Store.Database.ReadProducts(data.Suppliers).Select(product => product.Id));
         products.SuspendLayout();
         foreach (var p in data.Products.Where(p => p.IsActive))
         {
@@ -130,13 +132,15 @@ public sealed class ProductsView : UserControl
     private void AddDraft()
     {
         var draft = new ProductCard(null, data, category.SelectedIndex > 0 ? category.Text : "기타", MegaLookup, PieceLookup, NuldamLookup, ManualStoreLookup);
-        draft.Registered += () => { drafts.Remove(draft); productCards[draft.Product!.Id] = draft; UpdateCount(); };
+        draft.Registered += () => { drafts.Remove(draft); productCards[draft.Product!.Id] = draft;
+            persistedSearchIds.Add(draft.Product.Id); UpdateCount(); };
         draft.DeleteDraft += () => { drafts.Remove(draft); products.RemoveItem(draft); draft.Dispose(); };
         drafts.Insert(0, draft); products.Controls.Add(draft); products.Prepend(draft); products.AutoScrollPosition = Point.Empty;
         draft.Controls.OfType<TextBox>().Single().Focus();
     }
     private void CatalogChanged()
     {
+        persistedSearchIds.UnionWith(data.Store.Database.ReadProducts(data.Suppliers).Select(product => product.Id));
         foreach (var product in data.Products.Where(p => p.IsActive && !productCards.ContainsKey(p.Id)))
         { var card = new ProductCard(product, data); productCards.Add(product.Id, card); products.Controls.Add(card); }
         FilterProducts();
@@ -200,14 +204,15 @@ public sealed class ProductsView : UserControl
         }
         finally { progress.Finish(); importing = false; }
     }
-    private void ProductChanged(Product _) => UpdateCount();
+    private void ProductChanged(Product product) { persistedSearchIds.Add(product.Id); UpdateCount(); }
     private void UpdateCount() => count.Text = $"상품 {products.Items.Count(c => c.Product is { IsActive: true })}개";
     private void FilterProducts(bool resetScroll = true)
     {
-        IEnumerable<Product> list = productCards.Values.Select(c => c.Product!).Where(p => p.IsActive && p.Name.Contains(search.Text.Trim(), StringComparison.CurrentCultureIgnoreCase)
-            && (category.SelectedIndex == 0 || p.Category == category.Text)
-            && (supplier.SelectedIndex == 0 || p.Supplier.Name == supplier.Text));
-        list = list.OrderBy(p => Array.IndexOf(SampleData.Categories, p.Category)).ThenBy(p => p.Name, StringComparer.Create(new System.Globalization.CultureInfo("ko-KR"), false));
+        IEnumerable<Product> candidates = productCards.Values.Select(c => c.Product!).Where(p => p.IsActive &&
+            (category.SelectedIndex == 0 || p.Category == category.Text) &&
+            (supplier.SelectedIndex == 0 || p.Supplier.Name == supplier.Text) &&
+            (string.IsNullOrWhiteSpace(search.Text) || persistedSearchIds.Contains(p.Id)));
+        IEnumerable<Product> list = ProductSearch.Rank(candidates, search.Text);
         var visible = list.Select(p => productCards[p.Id]).ToArray();
         count.Text = $"상품 {visible.Count(c => c.Product!.IsActive)}개";
         products.SetItems(drafts.Concat(visible).ToArray(), resetScroll);

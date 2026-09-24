@@ -66,7 +66,9 @@ internal static partial class Program
             Mouse(sample, MouseButtons.Left, new Point(20, 20)); Require(launches.Count == 1 && launches[0].UseShellExecute && launches[0].FileName == "https://home.example.invalid/", "Product icon dispatches one default-browser homepage command");
             Mouse(sample, MouseButtons.Right, new Point(20, 20));
             var popup = (ContextMenuStrip)typeof(ProductCard).GetField("menu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(sample)!;
-            Require(popup.Items.Count == 8, "Icon right click shares card menu"); popup.Close();
+            Require(popup.Items.Count == 12 && popup.Items[5].Text == "이름 변경" &&
+                popup.Items[6].Text == "가격 변경" && popup.Items[7].Text == "링크 변경",
+                "Icon right click shares the updated card menu"); popup.Close();
             var naver = data.Products.Single(p => p.Id == 10); string oldUrl = naver.Url;
             naver.Url = "https://smartstore.naver.com/placer_mall/products/7419367541?query=test";
             Require(SellerLinks.ProductHome(naver) == "https://smartstore.naver.com/placer_mall", "Exact Naver store derived from known product path");

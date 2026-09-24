@@ -41,7 +41,7 @@ internal sealed class ClosedXmlProductWorkbook : IProductWorkbook
                 if (product.ProductId is int id) sheet.Cell(row, 1).Value = id;
                 sheet.Cell(row, 2).Value = product.Supplier;
                 sheet.Cell(row, 3).Value = product.Name;
-                sheet.Cell(row, 4).Value = (double)product.Price;
+                if (product.PriceKnown) sheet.Cell(row, 4).Value = (double)product.Price;
                 sheet.Cell(row, 5).Value = product.DisplayPrice;
                 sheet.Cell(row, 6).Value = product.Category;
                 sheet.Cell(row, 7).Value = product.ProductUrl;
@@ -91,15 +91,17 @@ internal sealed class ClosedXmlProductWorkbook : IProductWorkbook
                 }
                 string supplier = cells[1].GetString().Trim(), name = cells[2].GetString();
                 string display = cells[4].GetString(), category = cells[5].GetString().Trim(), url = cells[6].GetString().Trim();
-                bool lookup = url.Length != 0 && (supplier.Length == 0 || string.IsNullOrWhiteSpace(name) ||
-                    cells[3].IsEmpty() || cells[3].GetString().Trim().Length == 0 || category.Length == 0 || cells[7].IsEmpty());
+                bool manualUrl = ManualStoreProductLookup.TryProductUrl(url, out _, out _);
+                bool priceKnown = !cells[3].IsEmpty() && cells[3].GetString().Trim().Length != 0;
+                bool lookup = url.Length != 0 && (supplier.Length == 0 || category.Length == 0 || cells[7].IsEmpty() ||
+                    !manualUrl && (string.IsNullOrWhiteSpace(name) || !priceKnown));
                 decimal price = 0;
                 if (!lookup)
                 {
                     if (!suppliers.Any(item => item.Name == supplier || string.Equals(item.Id, supplier, StringComparison.OrdinalIgnoreCase)))
                         issues.Add(new(row, "Supplier", "등록된 판매처만 입력해주세요."));
-                    if (string.IsNullOrWhiteSpace(name)) issues.Add(new(row, "Name", "상품명을 입력해주세요."));
-                    if (!TryNumber(cells[3], out price) || price < 0)
+                    if (!manualUrl && string.IsNullOrWhiteSpace(name)) issues.Add(new(row, "Name", "상품명을 입력해주세요."));
+                    if (priceKnown && (!TryNumber(cells[3], out price) || price < 0) || !priceKnown && !manualUrl)
                         issues.Add(new(row, "Price", "0 이상의 숫자여야 합니다."));
                     if (!categories.Skip(1).Contains(category)) issues.Add(new(row, "Category", "고정 카테고리 중 하나를 입력해주세요."));
                 }
@@ -112,7 +114,7 @@ internal sealed class ClosedXmlProductWorkbook : IProductWorkbook
                 else if (cells[7].DataType == XLDataType.Boolean) active = cells[7].GetBoolean();
                 else if (cells[7].DataType != XLDataType.Text || !bool.TryParse(cells[7].GetString().Trim(), out active))
                     issues.Add(new(row, "IsActive", "true 또는 false만 입력해주세요."));
-                if (issues.Count == before) rows.Add(new(id, supplier, name, price, display, category, url, active, row, lookup));
+                if (issues.Count == before) rows.Add(new(id, supplier, name, price, display, category, url, active, row, lookup, priceKnown));
             }
             return new(rows, issues);
         }

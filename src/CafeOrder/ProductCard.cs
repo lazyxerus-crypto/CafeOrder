@@ -41,7 +41,7 @@ public sealed class ProductCard : Panel
     internal Rectangle CategoryBounds => new(48, 10, Math.Max(24, Width - 58), HeaderHeight(Width));
     internal string TooltipAt(Point location) => Product == null ? (CategoryBounds.Contains(location) ? draftCategory : "상품 링크 입력 후 Enter") :
         SellerBounds.Contains(location) ? SellerLinks.Hint(Product.Supplier, SellerLinks.ProductHome(Product)) :
-        CategoryBounds.Contains(location) ? Product.Category : PriceBounds.Contains(location) ? Product.PriceText : Product.Name;
+        CategoryBounds.Contains(location) ? Product.Category : PriceBounds.Contains(location) ? Product.PriceText : Product.DisplayName;
     internal static System.Diagnostics.ProcessStartInfo LinkStartInfo(string url) => new(url) { UseShellExecute = true };
     private void ArmHint(Point point)
     {
@@ -99,14 +99,14 @@ public sealed class ProductCard : Panel
     private void SyncState()
     {
         undo.Visible = Product is { IsActive: false };
-        hint.SetToolTip(this, Product?.Name ?? "상품 링크 입력 후 Enter");
+        hint.SetToolTip(this, Product?.DisplayName ?? "상품 링크 입력 후 Enter");
         Cursor = Product is { IsActive: true, Available: true } ? Cursors.Hand : Cursors.Default;
     }
     private void Run(Action action)
     {
         try { action(); feedback = ""; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or ImageMagick.MagickException)
-        { feedback = ex is ArgumentException ? ex.Message : "처리하지 못했습니다. 다시 시도해주세요"; }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or ImageMagick.MagickException)
+        { feedback = ex is ArgumentException or InvalidDataException ? ex.Message : "처리하지 못했습니다. 다시 시도해주세요"; }
         Invalidate(); Parent?.PerformLayout();
     }
     internal void RegisterDraft()
@@ -158,10 +158,14 @@ public sealed class ProductCard : Panel
                 webImage = data.Store.NewWebImagePath();
                 await Task.Run(() => ManualImages.Save(result.Product.ImageBytes, webImage));
             }
-            if (input.ImageFile != null)
+            if (input.ImageFile != null || input.ImageBytes != null)
             {
                 manualImage = data.Store.NewManualImagePath(Product?.Id ?? 0);
-                await Task.Run(() => ManualImages.Save(input.ImageFile, manualImage));
+                await Task.Run(() =>
+                {
+                    if (input.ImageBytes != null) ManualImages.Save(input.ImageBytes, manualImage);
+                    else ManualImages.Save(input.ImageFile!, manualImage);
+                });
             }
             if (IsDisposed) return;
             void Save()
@@ -291,7 +295,7 @@ public sealed class ProductCard : Panel
                 using var brush = new SolidBrush(Ui.Accent); g.FillRectangle(brush, badge);
                 TextRenderer.DrawText(g, "M", Role(TypographyKey.Category, FontStyle.Bold), badge, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
-            TextRenderer.DrawText(g, Product.Name, Role(TypographyKey.ProductName, FontStyle.Bold), NameBounds, Ui.Ink, TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl);
+            TextRenderer.DrawText(g, Product.DisplayName, Role(TypographyKey.ProductName, FontStyle.Bold), NameBounds, Ui.Ink, TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl);
             TextRenderer.DrawText(g, PriceDisplayText, Role(TypographyKey.ProductPrice), PriceBounds, Ui.Ink, TextFormatFlags.Right | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
             if (!Product.Available)
             {
@@ -353,13 +357,48 @@ public sealed class ProductCard : Panel
         });
         link.Enabled = !string.IsNullOrWhiteSpace(product?.Url);
         context.Items.Add(new ToolStripSeparator());
+        if (product != null)
+        {
+            context.Items.Add("이름 변경", null, (_, _) => EditField("이름 변경", product.Name,
+                value => data.ChangeName(product, value)));
+            context.Items.Add("가격 변경", null, (_, _) => EditField("가격 변경",
+                product.PriceKnown ? product.Price.ToString(System.Globalization.CultureInfo.InvariantCulture) : "",
+                value =>
+                {
+                    decimal? amount = null;
+                    if (value.Trim().Length != 0)
+                    {
+                        if (!decimal.TryParse(value.Trim(), System.Globalization.NumberStyles.Number,
+                            System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+                            throw new ArgumentException("가격은 비워두거나 숫자로 입력해주세요.");
+                        amount = parsed;
+                    }
+                    data.ChangePrice(product, amount);
+                }));
+            context.Items.Add("링크 변경", null, (_, _) => EditField("링크 변경", product.Url,
+                value => data.ChangeUrl(product, value)));
+            context.Items.Add(new ToolStripSeparator());
+        }
         var name = context.Items.Add("이름 복사", null, (_, _) => Copy(product!.Name)); name.Enabled = !string.IsNullOrEmpty(product?.Name);
-        var price = context.Items.Add("가격 복사", null, (_, _) => Copy(product!.PriceText)); price.Enabled = !string.IsNullOrEmpty(product?.PriceText);
+        var price = context.Items.Add("가격 복사", null, (_, _) => Copy(product!.PriceText)); price.Enabled = product?.PriceKnown == true;
         var both = context.Items.Add("이름 + 가격 복사", null, (_, _) => Copy(product!.Name + Environment.NewLine + product.PriceText)); both.Enabled = name.Enabled && price.Enabled;
-        if (product != null && ManualStoreProductLookup.TryProductUrl(product.Url, out var manualSupplier, out _) &&
-            manualSupplier == product.Supplier.Id)
-            context.Items.Add("상품 정보 수정", null, (_, _) => _ = EditManualStoreAsync());
         return context;
+    }
+    private void EditField(string title, string current, Action<string> save)
+    {
+        using var dialog = new Form { Text = title, StartPosition = FormStartPosition.CenterParent,
+            ClientSize = new Size(520, 115), MinimumSize = new Size(360, 150),
+            FormBorderStyle = FormBorderStyle.SizableToolWindow };
+        var field = new TextBox { Dock = DockStyle.Top, Text = current, Margin = new Padding(8) };
+        var confirm = new Button { Text = "확인", DialogResult = DialogResult.OK, AutoSize = true };
+        var cancel = new Button { Text = "취소", DialogResult = DialogResult.Cancel, AutoSize = true };
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true,
+            FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8) };
+        actions.Controls.Add(confirm); actions.Controls.Add(cancel);
+        var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10, 14, 10, 0) };
+        body.Controls.Add(field); dialog.Controls.Add(body); dialog.Controls.Add(actions);
+        dialog.AcceptButton = confirm; dialog.CancelButton = cancel;
+        if (dialog.ShowDialog(FindForm()) == DialogResult.OK) Run(() => save(field.Text));
     }
     private void Copy(string text) { try { Clipboard.SetText(text); } catch (System.Runtime.InteropServices.ExternalException) { feedback = "복사하지 못했습니다"; Invalidate(); } }
     private void LoadImages()
@@ -369,6 +408,10 @@ public sealed class ProductCard : Panel
         selectedImage = selection.Image; ownsImage = selection.Owned; manualImage = selection.Manual;
     }
     internal void SetManual(string source)
+    {
+        SetManual(File.ReadAllBytes(source));
+    }
+    internal void SetManual(byte[] source)
     {
         if (Product is not { IsActive: true }) return;
         string path = data.Store.NewManualImagePath(Product.Id);
@@ -394,11 +437,13 @@ public sealed class ProductCard : Panel
     }
     protected override void OnDragEnter(DragEventArgs e) { base.OnDragEnter(e); dragging = true; pressed = false; UpdateDrop(e); }
     protected override void OnDragOver(DragEventArgs e) { base.OnDragOver(e); UpdateDrop(e); }
-    private void UpdateDrop(DragEventArgs e) => e.Effect = Product is { IsActive: true } && ImageBounds.Contains(PointToClient(new Point(e.X, e.Y))) && e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: 1 } ? DragDropEffects.Copy : DragDropEffects.None;
+    private void UpdateDrop(DragEventArgs e) => e.Effect = Product is { IsActive: true } &&
+        ImageBounds.Contains(PointToClient(new Point(e.X, e.Y))) && ImageDropData.CanAccept(e.Data)
+        ? DragDropEffects.Copy : DragDropEffects.None;
     protected override void OnDragDrop(DragEventArgs e)
     {
         base.OnDragDrop(e); UpdateDrop(e); pressed = false;
-        if (e.Effect == DragDropEffects.Copy && e.Data?.GetData(DataFormats.FileDrop) is string[] files) Run(() => SetManual(files[0]));
+        if (e.Effect == DragDropEffects.Copy) Run(() => SetManual(ImageDropData.Read(e.Data)));
         dragging = false;
     }
     protected override void Dispose(bool disposing)

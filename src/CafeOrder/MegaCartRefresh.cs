@@ -9,6 +9,7 @@ public sealed partial class SampleData
     internal bool IsMegaCartLookupPending(Product product) => megaCartRefreshing.Contains(product.Id);
     internal bool MegaCartLookupFailed(Product product) => megaCartFailed.Contains(product.Id);
     internal bool CanStartLocalOrder(CartLine line) => line.Product.Available &&
+        (line.Product.Supplier.Manual || line.Product.PriceKnown) &&
         !IsMegaCartLookupPending(line.Product) && !MegaCartLookupFailed(line.Product);
 
     internal async Task RefreshFirstMegaCartAsync(Product product, CartLine addedLine,

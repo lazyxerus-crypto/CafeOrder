@@ -15,6 +15,22 @@ internal static partial class Program
     private static int Main(string[] args)
     {
         output = Path.GetFullPath(args.Length == 0 ? "artifacts/ui-checks" : args[0]); Directory.CreateDirectory(output);
+        if (args.Contains("--search-check"))
+        {
+            try { SearchChecks.Run(); Console.WriteLine("PASS: local cafe product search ranking and no result cap"); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
+        if (args.Contains("--fourteenth-check"))
+        {
+            try
+            {
+                Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                CheckFourteenthAsync().GetAwaiter().GetResult();
+                Console.WriteLine("PASS: optional manual fields, drag/drop, edit, XLSX and local order recovery"); return 0;
+            }
+            catch (Exception ex) { Console.WriteLine(ex); return 1; }
+        }
         if (args.Contains("--mega-site-manual"))
         {
             try { MegaSiteCartManualChecks.RunAsync().GetAwaiter().GetResult(); return 0; }
@@ -134,6 +150,11 @@ internal static partial class Program
             try { CheckCheckoutWindowsReadOnlyAsync().GetAwaiter().GetResult(); return 0; }
             catch (Exception ex) { Console.WriteLine(ex); return 1; }
         }
+        if (args.Contains("--order-review-readonly"))
+        {
+            try { CheckOrderReviewReadOnlyAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception ex) { Console.WriteLine(ex.GetType().Name + ": " + ex.Message); return 1; }
+        }
         if (args.Contains("--log-check"))
         {
             try { CheckOperationalLogAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS: operational log storage"); return 0; }
@@ -199,7 +220,7 @@ internal static partial class Program
             {
                 var current = new SampleData(new LocalState());
                 using var db = current.Store.Database.Connect();
-                Require(SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 4, "User DB migration version");
+                Require(SqlNumber(db, "SELECT MAX(Version) FROM SchemaMigrations") == 5, "User DB migration version");
                 using var integrity = db.CreateCommand(); integrity.CommandText = "PRAGMA integrity_check";
                 Require((string?)integrity.ExecuteScalar() == "ok", "User DB integrity");
                 long saved = SqlNumber(db, "SELECT COUNT(*) FROM Products");
@@ -307,11 +328,11 @@ internal static partial class Program
         Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty + 4, "Image drag gesture never adds");
         using (var menu = card.BuildMenu())
         {
-            Require(menu.Items.Cast<ToolStripItem>().Select(x => x.Text).SequenceEqual(new[] { "상품 삭제", "이미지 삭제", "카테고리 변경", "상품 링크", "", "이름 복사", "가격 복사", "이름 + 가격 복사" }), "Context menu ordering");
+            Require(menu.Items.Cast<ToolStripItem>().Select(x => x.Text).SequenceEqual(new[] { "상품 삭제", "이미지 삭제", "카테고리 변경", "상품 링크", "", "이름 변경", "가격 변경", "링크 변경", "", "이름 복사", "가격 복사", "이름 + 가격 복사" }), "Context menu ordering");
             Require(((ToolStripMenuItem)menu.Items[2]).DropDownItems.Cast<ToolStripItem>().Select(x => x.Text).SequenceEqual(SampleData.Categories.Skip(1)), "Category submenu");
-            menu.Items[5].PerformClick(); Require(Clipboard.GetText() == card.Product!.Name, "Copy full name");
-            menu.Items[6].PerformClick(); Require(Clipboard.GetText() == card.Product!.PriceText, "Copy price including note");
-            menu.Items[7].PerformClick(); Require(Clipboard.GetText() == card.Product!.Name + Environment.NewLine + card.Product.PriceText, "Copy name newline price");
+            menu.Items[9].PerformClick(); Require(Clipboard.GetText() == card.Product!.Name, "Copy full name");
+            menu.Items[10].PerformClick(); Require(Clipboard.GetText() == card.Product!.PriceText, "Copy price including note");
+            menu.Items[11].PerformClick(); Require(Clipboard.GetText() == card.Product!.Name + Environment.NewLine + card.Product.PriceText, "Copy name newline price");
             Mouse(card, MouseButtons.Right, new Point(45, 40));
             Require(data.Cart.Single(l => l.Product.Id == 1).Quantity == qty + 4, "Right click never adds");
             foreach (var popup in Application.OpenForms.Cast<Form>().Where(f => f != main).ToArray()) Require(popup.Name != "ToastHost", "No floating feedback");
@@ -415,8 +436,11 @@ internal static partial class Program
         var product = Find<ProductCard>(grid, "Product_7"); using var menu = product.BuildMenu(); ((ToolStripMenuItem)menu.Items[2]).DropDownItems[3].PerformClick(); Require(product.Product!.Category == "파우더", "Category update saved and same card reused");
         void CheckList()
         {
-            var expected = data.Products.Where(p => p.IsActive && (category.SelectedIndex == 0 || p.Category == category.Text) && (supplier.SelectedIndex == 0 || p.Supplier.Name == supplier.Text) && p.Name.Contains(search.Text.Trim(), StringComparison.CurrentCultureIgnoreCase))
-                .OrderBy(p => Array.IndexOf(SampleData.Categories, p.Category)).ThenBy(p => p.Name, StringComparer.Create(new System.Globalization.CultureInfo("ko-KR"), false)).ToArray();
+            var storedIds = data.Store.Database.ReadProducts(data.Suppliers).Select(p => p.Id).ToHashSet();
+            var expected = ProductSearch.Rank(data.Products.Where(p => p.IsActive &&
+                (category.SelectedIndex == 0 || p.Category == category.Text) &&
+                (supplier.SelectedIndex == 0 || p.Supplier.Name == supplier.Text) &&
+                (string.IsNullOrWhiteSpace(search.Text) || storedIds.Contains(p.Id))), search.Text);
             Require(grid.Items.Where(c => !c.IsDraft).Select(c => c.Product).SequenceEqual(expected) && grid.AutoScrollPosition == Point.Empty, "Common refresh applies filters/order and resets scroll");
             Require(grid.Items.Take(2).All(c => c.IsDraft), "Unfinished drafts retained separately at top");
         }
